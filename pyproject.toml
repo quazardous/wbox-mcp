@@ -1,0 +1,23 @@
+[project]
+name = "wbox-mcp"
+dynamic = ["version"]
+description = "Wayland/X11 box — nested compositor MCP server for GUI automation"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+wboxr = "wbox.cli.registry:main"
+wbox-mcp = "wbox.cli.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "wbox.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

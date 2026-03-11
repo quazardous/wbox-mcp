@@ -1,0 +1,15 @@
+name: xterm-wbox
+compositor: weston
+screen: "800x600"
+weston_shell: desktop
+weston_backend: x11
+
+log:
+  dir: ./log
+  level: debug
+
+screenshot_dir: ./screenshots
+
+app:
+  command: xterm
+  env: {}
