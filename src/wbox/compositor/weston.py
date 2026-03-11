@@ -59,7 +59,8 @@ class WestonCompositor(CompositorServer):
                 "",
             ])
 
-        ini_path = Path(tempfile.gettempdir()) / "weston_mcp.ini"
+        state_id = self.instance_name or self.compositor_name
+        ini_path = Path(tempfile.gettempdir()) / f"wbox_{state_id}_weston.ini"
         ini_path.write_text("\n".join(lines) + "\n")
         log.info("Wrote weston config: %s", ini_path)
         return ini_path
@@ -126,6 +127,18 @@ class WestonCompositor(CompositorServer):
     def _find_host_window(self) -> str:
         if self.backend != "x11":
             return ""
+        pid = self.state.compositor_pid or (
+            self.state.compositor_proc.pid if self.state.compositor_proc else 0
+        )
+        if pid:
+            # Search by PID to avoid matching other weston instances
+            result = subprocess.run(
+                ["xdotool", "search", "--pid", str(pid), "--name", "Weston"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip().splitlines()[0]
+        # Fallback to name-only search
         result = subprocess.run(
             ["xdotool", "search", "--name", "Weston"],
             capture_output=True, text=True, timeout=5,

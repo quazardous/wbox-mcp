@@ -15,11 +15,9 @@
 - **Concurrent instance support**: state files now use instance name (`/tmp/wbox_<name>_state.json`) instead of compositor type, allowing multiple wbox instances to run simultaneously
 - **Cage stderr logging**: cage compositor stderr is now captured to `./log/cage-compositor.log` for debugging (previously discarded)
 - **Clipboard tools**: `clipboard_read` and `clipboard_write` MCP tools — read/write the compositor's X11 clipboard via xclip or xsel
-- **`run.sh` wrapper generation**: `wboxr register` and `wboxr init` now auto-generate a `run.sh` wrapper script, working around MCP clients (like Claude Code) that don't reliably pass all args to subprocesses
 
 ### Changed
 
-- MCP entries now use `run.sh` wrapper (empty `args: []`) instead of passing config path via args
 - xclip added to optional system dependencies in setup.sh
 
 ## [0.2.0] - 2026-03-11

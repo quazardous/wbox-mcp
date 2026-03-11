@@ -6,3 +6,4 @@ build/
 *.pyc
 log/
 screenshots/
+.mcp.json

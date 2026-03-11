@@ -290,19 +290,15 @@ class CompositorServer:
                 pass
 
         if aggressive:
-            result = subprocess.run(
-                ["pgrep", "-x", self.compositor_name],
-                capture_output=True, text=True,
-            )
-            if result.returncode == 0:
-                for line in result.stdout.strip().splitlines():
-                    orphan_pid = int(line.strip())
-                    if orphan_pid != pid and _pid_alive(orphan_pid):
-                        try:
-                            os.kill(orphan_pid, signal.SIGKILL)
-                            killed.append(f"orphan-{self.compositor_name}(pid={orphan_pid})")
-                        except ProcessLookupError:
-                            pass
+            # Only kill orphan compositors that belong to this instance
+            # (matched by state file PID), not other wbox instances
+            stale_pid = self.state.compositor_pid
+            if stale_pid and stale_pid != pid and _pid_alive(stale_pid):
+                try:
+                    os.kill(stale_pid, signal.SIGKILL)
+                    killed.append(f"orphan-{self.compositor_name}(pid={stale_pid})")
+                except ProcessLookupError:
+                    pass
 
         time.sleep(1)
         self.state.compositor_proc = None
@@ -548,7 +544,8 @@ class CompositorServer:
         return {"error": f"unknown target: {target!r} (use 'xev', 'active', or 'window')"}
 
     def _debug_input_xev(self, test_key: str, env: dict) -> dict:
-        logfile = Path("/tmp/compositor_xev.log")
+        state_id = self.instance_name or self.compositor_name
+        logfile = Path(tempfile.gettempdir()) / f"wbox_{state_id}_xev.log"
         xev_proc = subprocess.Popen(
             ["xev", "-event", "keyboard"],
             stdout=open(logfile, "w"),
@@ -615,37 +612,36 @@ class CompositorServer:
         return ""
 
     def _clean_stale_sockets(self):
-        result = subprocess.run(
-            ["pgrep", "-x", self.compositor_name],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            log.info("Skipping socket cleanup: %s process(es) still running", self.compositor_name)
+        # Only clean sockets that belonged to this instance (from state file).
+        # Do NOT blindly clean all sockets — other wbox instances may be using them.
+        wl_display = self.state.wayland_display
+        x_display = self.state.x_display
+
+        if not wl_display and not x_display:
             return
 
         runtime_dir = Path(
             os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
         )
-        host_display = os.environ.get("WAYLAND_DISPLAY", "wayland-0")
-        x11_dir = Path("/tmp/.X11-unix")
 
-        for sock in runtime_dir.glob("wayland-[0-9]"):
-            if sock.name == host_display:
-                continue
-            lock = sock.parent / f"{sock.name}.lock"
-            try:
-                sock.unlink(missing_ok=True)
-                lock.unlink(missing_ok=True)
-                log.info("Cleaned stale Wayland socket: %s", sock.name)
-            except OSError:
-                pass
+        if wl_display:
+            sock = runtime_dir / wl_display
+            lock = runtime_dir / f"{wl_display}.lock"
+            if sock.exists():
+                try:
+                    sock.unlink(missing_ok=True)
+                    lock.unlink(missing_ok=True)
+                    log.info("Cleaned stale Wayland socket: %s", wl_display)
+                except OSError:
+                    pass
 
-        if x11_dir.exists():
-            for sock in x11_dir.glob("X*"):
-                num = re.search(r"X(\d+)$", sock.name)
-                if num and int(num.group(1)) >= 2:
-                    try:
-                        sock.unlink(missing_ok=True)
-                        log.info("Cleaned stale X11 socket: %s", sock.name)
-                    except OSError:
-                        pass
+        if x_display:
+            # x_display is like ":2", socket is /tmp/.X11-unix/X2
+            num = x_display.lstrip(":")
+            x11_sock = Path("/tmp/.X11-unix") / f"X{num}"
+            if x11_sock.exists():
+                try:
+                    x11_sock.unlink(missing_ok=True)
+                    log.info("Cleaned stale X11 socket: %s", x_display)
+                except OSError:
+                    pass
