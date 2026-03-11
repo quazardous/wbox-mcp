@@ -2,22 +2,51 @@
 wboxr CLI — Registry/admin tool for wbox-mcp.
 
 Usage:
-    wboxr init [directory]        Full wizard (create or reconfigure)
-    wboxr tool add [directory]    Add a custom script tool
-    wboxr tool remove <name> [directory]
-    wboxr tool list [directory]
-    wboxr list                    List wbox-mcp instances from Claude settings
+    wboxr init [directory] [OPTIONS]   Setup wizard (create or reconfigure)
+    wboxr tool add [directory]         Add a custom script tool
+    wboxr tool remove <name> [dir]     Remove a tool
+    wboxr tool list [directory]        List all tools
+    wboxr register [directory]         Register in .mcp.json
+    wboxr unregister <name>            Remove from .mcp.json
+    wboxr list                         Find instances in Claude settings
+
+Init options (non-interactive mode):
+    --name NAME              Instance name
+    --compositor TYPE        weston or cage
+    --screen WxH             Screen size (e.g. 1280x800)
+    --weston-backend TYPE    wayland or x11
+    --weston-shell TYPE      kiosk or desktop
+    --app-command CMD        App command to launch
+    --app-env KEY=VALUE      Environment variable (repeatable)
+    --pre-launch CMD         Pre-launch script (repeatable)
+    --tool NAME:SCRIPT:DESC  Custom tool (repeatable)
+    --mcp-dir DIR            Explicit directory for config/log/screenshots
+    --from FILE              Load config from a YAML template
+    --register               Auto-register in .mcp.json after init
+
+If no directory or --mcp-dir is given:
+    - In a project root (.git, pyproject.toml, etc.) → defaults to ./wbox
+    - Otherwise → defaults to current directory
+
+Register options:
+    --global                 Register in ~/.claude.json instead of .mcp.json
+    --file PATH              Register in a specific file
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
 import yaml
 
 from wbox.config import DEFAULT_CONFIG, load_config, save_config
+
+
+def _is_interactive() -> bool:
+    return sys.stdin.isatty()
 
 
 def _prompt(label: str, default: str = "") -> str:
@@ -53,32 +82,184 @@ def _prompt_env() -> dict[str, str]:
     return env
 
 
+_PROJECT_ROOT_MARKERS = (
+    ".git", ".hg", ".svn",
+    "package.json", "pyproject.toml", "Cargo.toml", "go.mod",
+    "Makefile", "CMakeLists.txt", "pom.xml", "build.gradle",
+    ".mcp.json", "CLAUDE.md",
+)
+
+
+def _is_project_root(d: Path) -> bool:
+    """Check if directory looks like a project root."""
+    return any((d / marker).exists() for marker in _PROJECT_ROOT_MARKERS)
+
+
+def _resolve_default_dir() -> Path:
+    """Smart default: ./wbox if in a project root, else current dir."""
+    cwd = Path.cwd()
+    if _is_project_root(cwd):
+        return cwd / "wbox"
+    return cwd
+
+
 def _resolve_config_path(directory: str | None) -> Path:
     if directory:
         d = Path(directory)
     else:
-        d = Path.cwd()
+        d = _resolve_default_dir()
     return d / "config.yaml"
+
+
+def _detect_wbox_command() -> tuple[str, list[str]]:
+    """Detect the best way to invoke wbox-mcp."""
+    # 1. Installed mode — wbox-mcp on PATH
+    if shutil.which("wbox-mcp"):
+        return "wbox-mcp", ["serve"]
+    # 2. Dev mode — absolute path to venv binary
+    venv_bin = Path(sys.executable).parent / "wbox-mcp"
+    if venv_bin.exists():
+        return str(venv_bin.resolve()), ["serve"]
+    # 3. Fallback: uvx
+    return "uvx", ["wbox-mcp", "serve"]
+
+
+def _build_mcp_entry(cfg: dict, config_path: Path) -> dict:
+    """Build the MCP server entry for .mcp.json.
+
+    Uses absolute paths for both command and config — does NOT rely on cwd
+    since not all MCP clients support it reliably.
+    """
+    command, base_args = _detect_wbox_command()
+    abs_config = str(config_path.resolve())
+    args = base_args + [abs_config]
+    return {
+        "type": "stdio",
+        "command": command,
+        "args": args,
+    }
+
+
+# ── Parse init flags ──────────────────────────────────────────────
+
+
+def _parse_init_args(args: list[str]) -> tuple[str | None, dict]:
+    """Parse init subcommand args. Returns (directory, flags)."""
+    directory = None
+    flags: dict = {
+        "app_env": [],
+        "pre_launch": [],
+        "tools": [],
+    }
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--name":
+            flags["name"] = args[i + 1]; i += 2
+        elif a == "--compositor":
+            flags["compositor"] = args[i + 1]; i += 2
+        elif a == "--screen":
+            flags["screen"] = args[i + 1]; i += 2
+        elif a == "--weston-backend":
+            flags["weston_backend"] = args[i + 1]; i += 2
+        elif a == "--weston-shell":
+            flags["weston_shell"] = args[i + 1]; i += 2
+        elif a == "--app-command":
+            flags["app_command"] = args[i + 1]; i += 2
+        elif a == "--app-env":
+            flags["app_env"].append(args[i + 1]); i += 2
+        elif a == "--pre-launch":
+            flags["pre_launch"].append(args[i + 1]); i += 2
+        elif a == "--tool":
+            flags["tools"].append(args[i + 1]); i += 2
+        elif a == "--mcp-dir":
+            directory = args[i + 1]; i += 2
+        elif a == "--from":
+            flags["from_file"] = args[i + 1]; i += 2
+        elif a == "--register":
+            flags["register"] = True; i += 1
+        elif a == "--update-claude-settings":
+            flags["update_claude_settings"] = True; i += 1
+        elif not a.startswith("-"):
+            directory = a; i += 1
+        else:
+            print(f"Unknown init option: {a}", file=sys.stderr)
+            sys.exit(1)
+    return directory, flags
 
 
 # ── Commands ───────────────────────────────────────────────────────
 
 
-def cmd_init(directory: str | None = None):
-    """Full wizard: create or reconfigure a wbox-mcp instance."""
-    config_path = _resolve_config_path(directory)
-    existing = load_config(config_path) if config_path.exists() else {}
+def cmd_init(args: list[str]):
+    """Full wizard or non-interactive init."""
+    directory, flags = _parse_init_args(args)
 
-    if existing:
+    # In interactive mode without explicit directory, let user confirm/change
+    has_flags = any(k in flags for k in ("name", "compositor", "app_command", "from_file"))
+    if _is_interactive() and not has_flags and directory is None:
+        default_dir = _resolve_default_dir()
+        cwd = Path.cwd()
+        if _is_project_root(cwd):
+            print(f"Project root detected ({cwd.name}/)")
+            chosen = _prompt("MCP directory", str(default_dir.relative_to(cwd)))
+            directory = str(cwd / chosen)
+        # else: use cwd, no prompt needed
+
+    config_path = _resolve_config_path(directory)
+
+    # --from: load template
+    if "from_file" in flags:
+        template = Path(flags["from_file"])
+        if not template.exists():
+            print(f"Error: template not found: {template}", file=sys.stderr)
+            sys.exit(1)
+        cfg = yaml.safe_load(template.read_text()) or {}
+    else:
+        existing = load_config(config_path) if config_path.exists() else {}
+        cfg = dict(DEFAULT_CONFIG)
+        cfg.update({k: v for k, v in existing.items() if not k.startswith("_")})
+
+    # Check if we have enough flags for non-interactive mode
+    has_flags = any(k in flags for k in ("name", "compositor", "app_command", "from_file"))
+    interactive = _is_interactive() and not has_flags
+
+    if interactive:
+        _init_interactive(cfg, config_path)
+    else:
+        _init_noninteractive(cfg, flags)
+
+    # Save
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    save_config(cfg, config_path)
+    print(f"Saved: {config_path}")
+
+    # Create directories
+    base = config_path.parent
+    log_cfg = cfg.get("log", {})
+    log_dir = log_cfg.get("dir", "./log") if isinstance(log_cfg, dict) else log_cfg
+    (base / log_dir).mkdir(parents=True, exist_ok=True)
+    (base / cfg.get("screenshot_dir", "./screenshots")).mkdir(parents=True, exist_ok=True)
+
+    # Register or print snippet
+    ucs = flags.get("update_claude_settings", False)
+    if flags.get("register"):
+        _do_register(cfg, config_path, update_claude_settings=ucs)
+    else:
+        _print_claude_snippet(cfg, config_path)
+        if interactive and _prompt_yn("\nRegister in .mcp.json?", default=True):
+            do_ucs = _prompt_yn("Allow all tools in Claude settings?", default=True)
+            _do_register(cfg, config_path, update_claude_settings=do_ucs)
+
+
+def _init_interactive(cfg: dict, config_path: Path):
+    """Interactive wizard mode."""
+    if config_path.exists():
         print(f"Found existing config: {config_path}")
         print("Press Enter to keep current values.\n")
     else:
         print("Creating new wbox-mcp instance.\n")
 
-    cfg = dict(DEFAULT_CONFIG)
-    cfg.update({k: v for k, v in existing.items() if not k.startswith("_")})
-
-    # Basic settings
     cfg["name"] = _prompt("Instance name", cfg.get("name", "my-wbox"))
     cfg["compositor"] = _prompt("Compositor [weston/cage]", cfg.get("compositor", "weston"))
     cfg["screen"] = _prompt("Screen size", cfg.get("screen", "1280x800"))
@@ -139,18 +320,57 @@ def cmd_init(directory: str | None = None):
     if _prompt_yn("Add custom script tools?", default=False):
         _wizard_add_tools(cfg)
 
-    # Save
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    save_config(cfg, config_path)
-    print(f"\nSaved: {config_path}")
 
-    # Create directories
-    base = config_path.parent
-    (base / cfg["log"]["dir"]).mkdir(parents=True, exist_ok=True)
-    (base / cfg["screenshot_dir"]).mkdir(parents=True, exist_ok=True)
+def _init_noninteractive(cfg: dict, flags: dict):
+    """Non-interactive mode: apply flags to config."""
+    if not _is_interactive() and not any(k in flags for k in ("name", "compositor", "app_command", "from_file")):
+        print("Error: non-interactive mode requires --name, --app-command, --from, or other flags.", file=sys.stderr)
+        print("Run 'wboxr init --help' for usage.", file=sys.stderr)
+        sys.exit(1)
 
-    # Generate Claude MCP config snippet
-    _print_claude_snippet(cfg, config_path)
+    if "name" in flags:
+        cfg["name"] = flags["name"]
+    if "compositor" in flags:
+        cfg["compositor"] = flags["compositor"]
+    if "screen" in flags:
+        cfg["screen"] = flags["screen"]
+    if "weston_backend" in flags:
+        cfg["weston_backend"] = flags["weston_backend"]
+    if "weston_shell" in flags:
+        cfg["weston_shell"] = flags["weston_shell"]
+
+    # App
+    app_cfg = cfg.get("app", {})
+    if isinstance(app_cfg, str):
+        app_cfg = {"command": app_cfg}
+    if "app_command" in flags:
+        app_cfg["command"] = flags["app_command"]
+    if flags.get("app_env"):
+        env = app_cfg.get("env", {})
+        for entry in flags["app_env"]:
+            if "=" not in entry:
+                print(f"Error: invalid --app-env format: {entry} (use KEY=VALUE)", file=sys.stderr)
+                sys.exit(1)
+            k, v = entry.split("=", 1)
+            env[k.strip()] = v.strip()
+        app_cfg["env"] = env
+    if flags.get("pre_launch"):
+        app_cfg["pre_launch"] = flags["pre_launch"]
+    cfg["app"] = app_cfg
+
+    # Tools
+    if flags.get("tools"):
+        tools = cfg.get("tools", {})
+        for entry in flags["tools"]:
+            parts = entry.split(":", 2)
+            if len(parts) < 2:
+                print(f"Error: invalid --tool format: {entry} (use NAME:SCRIPT[:DESCRIPTION])", file=sys.stderr)
+                sys.exit(1)
+            name = parts[0]
+            script = parts[1]
+            desc = parts[2] if len(parts) > 2 else f"Custom tool: {name}"
+            tools[name] = {"script": script, "description": desc}
+        cfg["tools"] = tools
 
 
 def _wizard_add_tools(cfg: dict):
@@ -268,7 +488,6 @@ def cmd_tool_list(directory: str | None = None):
 
     cfg = load_config(config_path)
 
-    # Built-in tools
     builtins = [
         "launch", "stop", "kill", "screenshot", "click", "type_text",
         "key", "keys", "mouse_move", "get_size", "resize", "clean",
@@ -289,14 +508,157 @@ def cmd_tool_list(directory: str | None = None):
         print("\nNo custom tools configured.")
 
 
+# ── Register / Unregister ─────────────────────────────────────────
+
+
+def _resolve_mcp_json(global_: bool = False, file_: str | None = None) -> Path:
+    """Resolve the target .mcp.json path."""
+    if file_:
+        return Path(file_)
+    if global_:
+        return Path.home() / ".claude.json"
+    return Path.cwd() / ".mcp.json"
+
+
+def _do_register(cfg: dict, config_path: Path, global_: bool = False,
+                  file_: str | None = None, update_claude_settings: bool = False):
+    """Write MCP entry into .mcp.json."""
+    mcp_json = _resolve_mcp_json(global_, file_)
+    name = cfg.get("name", "my-wbox")
+    entry = _build_mcp_entry(cfg, config_path)
+
+    # Read existing or create new
+    data = {}
+    if mcp_json.exists():
+        try:
+            data = json.loads(mcp_json.read_text())
+        except Exception:
+            pass
+
+    if "mcpServers" not in data:
+        data["mcpServers"] = {}
+
+    data["mcpServers"][name] = entry
+    mcp_json.write_text(json.dumps(data, indent=2) + "\n")
+    print(f"Registered '{name}' in {mcp_json}")
+
+    if update_claude_settings:
+        _add_claude_permission(name)
+
+
+def _find_claude_settings() -> Path:
+    """Find the best Claude settings file to write permissions to.
+
+    Prefers .claude/settings.local.json (user-local, gitignored) if it exists,
+    otherwise falls back to .claude/settings.json.
+    """
+    local = Path.home() / ".claude" / "settings.local.json"
+    if local.exists():
+        return local
+    return Path.home() / ".claude" / "settings.json"
+
+
+def _add_claude_permission(server_name: str):
+    """Add mcp__<name>__* wildcard permission to Claude settings."""
+    settings_path = _find_claude_settings()
+    data = {}
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text())
+        except Exception:
+            pass
+
+    if "permissions" not in data:
+        data["permissions"] = {}
+    if "allow" not in data["permissions"]:
+        data["permissions"]["allow"] = []
+
+    perm = f"mcp__{server_name}__*"
+    if perm not in data["permissions"]["allow"]:
+        data["permissions"]["allow"].append(perm)
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(data, indent=2) + "\n")
+        print(f"Added permission '{perm}' to {settings_path}")
+    else:
+        print(f"Permission '{perm}' already in {settings_path}")
+
+
+def cmd_register(args: list[str]):
+    """Register a wbox-mcp instance in .mcp.json."""
+    directory = None
+    global_ = False
+    file_ = None
+    update_claude_settings = False
+
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--global":
+            global_ = True; i += 1
+        elif a == "--file":
+            file_ = args[i + 1]; i += 2
+        elif a == "--update-claude-settings":
+            update_claude_settings = True; i += 1
+        elif not a.startswith("-"):
+            directory = a; i += 1
+        else:
+            print(f"Unknown option: {a}", file=sys.stderr)
+            sys.exit(1)
+
+    config_path = _resolve_config_path(directory)
+    if not config_path.exists():
+        print(f"Error: {config_path} not found. Run 'wboxr init' first.", file=sys.stderr)
+        sys.exit(1)
+
+    cfg = load_config(config_path)
+    _do_register(cfg, config_path, global_, file_, update_claude_settings)
+
+
+def cmd_unregister(args: list[str]):
+    """Remove a wbox-mcp instance from .mcp.json."""
+    if not args or args[0].startswith("-"):
+        print("Usage: wboxr unregister <name> [--global] [--file PATH]", file=sys.stderr)
+        sys.exit(1)
+
+    name = args[0]
+    global_ = False
+    file_ = None
+
+    i = 1
+    while i < len(args):
+        a = args[i]
+        if a == "--global":
+            global_ = True; i += 1
+        elif a == "--file":
+            file_ = args[i + 1]; i += 2
+        else:
+            print(f"Unknown option: {a}", file=sys.stderr)
+            sys.exit(1)
+
+    mcp_json = _resolve_mcp_json(global_, file_)
+    if not mcp_json.exists():
+        print(f"Error: {mcp_json} not found.", file=sys.stderr)
+        sys.exit(1)
+
+    data = json.loads(mcp_json.read_text())
+    servers = data.get("mcpServers", {})
+
+    if name not in servers:
+        print(f"'{name}' not found in {mcp_json}", file=sys.stderr)
+        sys.exit(1)
+
+    del servers[name]
+    data["mcpServers"] = servers
+    mcp_json.write_text(json.dumps(data, indent=2) + "\n")
+    print(f"Unregistered '{name}' from {mcp_json}")
+
+
 def cmd_list():
     """List wbox-mcp instances found in Claude settings."""
-    # Check common Claude settings locations
     paths = [
         Path.home() / ".claude.json",
         Path.home() / ".claude" / "settings.json",
     ]
-    # Also check project-level .mcp.json files
     cwd = Path.cwd()
     paths.append(cwd / ".mcp.json")
 
@@ -309,9 +671,9 @@ def cmd_list():
             servers = data.get("mcpServers", {})
             for name, sdef in servers.items():
                 cmd = sdef.get("command", "")
-                args = sdef.get("args", [])
-                full_cmd = f"{cmd} {' '.join(args)}"
-                if "wbox-mcp" in full_cmd:
+                cmd_args = sdef.get("args", [])
+                full_cmd = f"{cmd} {' '.join(cmd_args)}"
+                if "wbox-mcp" in full_cmd or "wbox" in name:
                     cwd_val = sdef.get("cwd", "")
                     found.append((name, cwd_val, str(p)))
         except Exception:
@@ -329,17 +691,11 @@ def cmd_list():
 def _print_claude_snippet(cfg: dict, config_path: Path):
     """Print the Claude MCP config snippet."""
     name = cfg.get("name", "my-wbox")
-    cwd = str(config_path.parent.resolve())
+    entry = _build_mcp_entry(cfg, config_path)
 
-    snippet = {
-        name: {
-            "command": "uv",
-            "args": ["run", "--with", "wbox-mcp", "wbox-mcp", "serve"],
-            "cwd": cwd,
-        }
-    }
+    snippet = {name: entry}
 
-    print(f"\nAdd this to your Claude MCP settings (.mcp.json or claude settings):")
+    print(f"\nAdd this to your .mcp.json:")
     print(f"  \"mcpServers\": {json.dumps(snippet, indent=4)}")
 
 
@@ -361,7 +717,7 @@ def main():
         sys.exit(0)
 
     if cmd == "init":
-        cmd_init(args[1] if len(args) > 1 else None)
+        cmd_init(args[1:])
     elif cmd == "tool":
         if len(args) < 2:
             print("Usage: wboxr tool [add|remove|list] ...", file=sys.stderr)
@@ -379,6 +735,10 @@ def main():
         else:
             print(f"Unknown subcommand: tool {subcmd}", file=sys.stderr)
             sys.exit(1)
+    elif cmd == "register":
+        cmd_register(args[1:])
+    elif cmd == "unregister":
+        cmd_unregister(args[1:])
     elif cmd == "list":
         cmd_list()
     else:
