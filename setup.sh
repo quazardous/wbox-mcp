@@ -90,6 +90,8 @@ DEPS_MAP=(
     "grim:grim:grim:grim"
     "weston-screenshooter:weston:weston:weston"
     "xev:xorg-x11-utils:x11-utils:xorg-xev"
+    "xclip:xclip:xclip:xclip"
+    "xsel:xsel:xsel:xsel"
 )
 
 pkg_for() {
@@ -121,7 +123,7 @@ install_pkgs() {
 # ── Runtime dependencies ───────────────────────────────────────────
 
 REQUIRED_BINS=(xdotool)
-OPTIONAL_BINS=(weston cage grim weston-screenshooter xev)
+OPTIONAL_BINS=(weston cage grim weston-screenshooter xev xclip xsel)
 
 MISSING_REQUIRED=()
 MISSING_OPTIONAL=()
@@ -144,6 +146,7 @@ if [ ${#ALL_MISSING[@]} -gt 0 ]; then
         echo "MISSING (optional): ${MISSING_OPTIONAL[*]}"
         echo "  You need at least one compositor (weston or cage)."
         echo "  grim is needed for cage screenshots, weston-screenshooter for weston."
+        echo "  xclip or xsel is needed for clipboard tools."
     fi
     echo ""
 

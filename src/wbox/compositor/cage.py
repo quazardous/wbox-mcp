@@ -22,6 +22,15 @@ class CageCompositor(CompositorServer):
 
     compositor_name = "cage"
 
+    def __init__(self, *, screen: str = "1280x800", instance_name: str = "",
+                 timeouts: dict | None = None):
+        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts)
+        self._log_file: Path | None = None
+
+    def set_log_dir(self, log_dir: Path) -> None:
+        """Set directory for cage stderr log capture."""
+        self._log_file = log_dir / "cage-compositor.log"
+
     def _start_compositor(
         self,
         app_cmd: list[str],
@@ -44,8 +53,17 @@ class CageCompositor(CompositorServer):
 
         log.info("Launching cage: %s", " ".join(cage_cmd))
 
+        # Capture stderr to log file for debugging
+        stderr_target: int | object
+        if self._log_file:
+            self._log_file.parent.mkdir(parents=True, exist_ok=True)
+            stderr_target = open(self._log_file, "w")
+            log.info("Cage stderr → %s", self._log_file)
+        else:
+            stderr_target = subprocess.PIPE
+
         self.state.compositor_proc = subprocess.Popen(
             cage_cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=stderr_target,
         )

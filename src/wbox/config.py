@@ -21,6 +21,11 @@ DEFAULT_CONFIG = {
         "level": "info",
     },
     "screenshot_dir": "./screenshots",
+    "timeouts": {
+        "wayland_display": 10,
+        "xwayland_display": 15,
+        "app_render": 3,
+    },
     "app": {
         "command": "",
         "env": {},

@@ -94,9 +94,14 @@ class CompositorServer:
 
     compositor_name: str = "compositor"
 
-    def __init__(self, *, screen: str = "1280x800"):
+    def __init__(self, *, screen: str = "1280x800", instance_name: str = "",
+                 timeouts: dict | None = None):
         self.screen = screen
-        self._state_file = Path(tempfile.gettempdir()) / f"{self.compositor_name}_mcp_state.json"
+        self.instance_name = instance_name
+        self.timeouts = timeouts or {}
+        # Use instance name for state file if available, else compositor name
+        state_id = instance_name or self.compositor_name
+        self._state_file = Path(tempfile.gettempdir()) / f"wbox_{state_id}_state.json"
         self.state = CompositorState.load(self._state_file) or CompositorState()
 
     def reload_state(self) -> None:
@@ -162,19 +167,21 @@ class CompositorServer:
         self._start_compositor(app_cmd, app_env, wl_before, x11_before)
 
         # Wait for compositor's Wayland display
-        wayland_display = self._wait_for_wayland_display(wl_before, timeout=10)
+        wl_timeout = self.timeouts.get("wayland_display", 10)
+        wayland_display = self._wait_for_wayland_display(wl_before, timeout=wl_timeout)
         if not wayland_display:
             return {
-                "error": f"{self.compositor_name} Wayland display did not appear in time",
+                "error": f"{self.compositor_name} Wayland display did not appear in time (timeout={wl_timeout}s)",
                 "pid": self.state.compositor_proc.pid if self.state.compositor_proc else 0,
             }
         self.state.wayland_display = wayland_display
 
         # Wait for Xwayland display
-        x_display = self._wait_for_xwayland(x11_before, timeout=15)
+        xwl_timeout = self.timeouts.get("xwayland_display", 15)
+        x_display = self._wait_for_xwayland(x11_before, timeout=xwl_timeout)
         if not x_display:
             return {
-                "error": "Xwayland display did not appear in time",
+                "error": f"Xwayland display did not appear in time (timeout={xwl_timeout}s)",
                 "pid": self.state.compositor_proc.pid if self.state.compositor_proc else 0,
             }
         self.state.x_display = x_display
@@ -183,7 +190,8 @@ class CompositorServer:
         self._start_app(app_cmd, app_env)
 
         # Wait for app to render
-        time.sleep(3)
+        render_wait = self.timeouts.get("app_render", 3)
+        time.sleep(render_wait)
 
         self.state.compositor_pid = (
             self.state.compositor_proc.pid if self.state.compositor_proc else 0
@@ -220,7 +228,8 @@ class CompositorServer:
         self.state.app_pid = 0
 
         self._start_app(app_cmd, app_env or {})
-        time.sleep(3)
+        render_wait = self.timeouts.get("app_render", 3)
+        time.sleep(render_wait)
 
         self.state.save(self._state_file)
         return {
@@ -377,6 +386,70 @@ class CompositorServer:
         if not self.is_running():
             return {"error": "compositor is not running"}
         return self._xdotool("mousemove", str(x), str(y))
+
+    # ── Clipboard ────────────────────────────────────────────────────
+
+    def _clipboard_env(self) -> dict | None:
+        """Build env dict for clipboard operations, or None if not available."""
+        if not self.state.x_display:
+            self.reload_state()
+        if not self.state.x_display:
+            return None
+        env = os.environ.copy()
+        env["DISPLAY"] = self.state.x_display
+        return env
+
+    def clipboard_read(self) -> dict:
+        """Read text from the X11 clipboard."""
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        env = self._clipboard_env()
+        if not env:
+            return {"error": "no x_display available"}
+
+        import shutil
+        # Try xsel first (doesn't block), then xclip
+        if shutil.which("xsel"):
+            cmd = ["xsel", "--clipboard", "--output"]
+        elif shutil.which("xclip"):
+            cmd = ["xclip", "-selection", "clipboard", "-o"]
+        else:
+            return {"error": "no clipboard tool found — install xclip or xsel"}
+
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return {"error": f"clipboard read failed: {result.stderr.strip()}"}
+        return {"text": result.stdout}
+
+    def clipboard_write(self, text: str) -> dict:
+        """Write text to the X11 clipboard."""
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        env = self._clipboard_env()
+        if not env:
+            return {"error": "no x_display available"}
+
+        import shutil
+        if shutil.which("xsel"):
+            cmd = ["xsel", "--clipboard", "--input"]
+            result = subprocess.run(cmd, input=text, env=env, capture_output=True, text=True, timeout=5)
+            if result.returncode != 0:
+                return {"error": f"xsel write failed: {result.stderr.strip()}"}
+        elif shutil.which("xclip"):
+            # xclip forks a daemon to own the clipboard — run it detached
+            proc = subprocess.Popen(
+                ["xclip", "-selection", "clipboard"],
+                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                env=env,
+            )
+            proc.stdin.write(text.encode())
+            proc.stdin.close()
+            # Don't wait — xclip stays alive as clipboard owner until
+            # another process claims the clipboard. This is expected.
+        else:
+            return {"error": "no clipboard tool found — install xclip or xsel"}
+
+        return {"ok": True, "length": len(text)}
 
     # ── Internal helpers ────────────────────────────────────────────
 

@@ -30,8 +30,9 @@ class WestonCompositor(CompositorServer):
     compositor_name = "weston"
 
     def __init__(self, *, screen: str = "1280x800", shell: str = "kiosk",
-                 backend: str = "wayland"):
-        super().__init__(screen=screen)
+                 backend: str = "wayland", instance_name: str = "",
+                 timeouts: dict | None = None):
+        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts)
         self.shell = shell
         self.backend = backend
         self._ini_path: Path | None = None

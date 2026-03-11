@@ -34,15 +34,24 @@ def build_compositor(cfg: dict) -> CompositorServer:
     """Build a compositor backend from config."""
     backend = cfg.get("compositor", "cage")
     screen = cfg.get("screen", "1280x800")
+    instance_name = cfg.get("name", "")
+    timeouts = cfg.get("timeouts", {})
 
     if backend == "weston":
         return WestonCompositor(
             screen=screen,
             shell=cfg.get("weston_shell", "kiosk"),
             backend=cfg.get("weston_backend", "wayland"),
+            instance_name=instance_name,
+            timeouts=timeouts,
         )
     else:
-        return CageCompositor(screen=screen)
+        comp = CageCompositor(
+            screen=screen,
+            instance_name=instance_name,
+            timeouts=timeouts,
+        )
+        return comp
 
 
 def _build_app_cmd(cfg: dict) -> list[str]:
@@ -179,6 +188,10 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
     cfg["_log_dir"] = resolve_dir(cfg, "log.dir", "./log")
     cfg["_screenshot_dir"] = resolve_dir(cfg, "screenshot_dir", "./screenshots")
     compositor.state.screenshot_dir = cfg["_screenshot_dir"]
+
+    # Set cage log dir for stderr capture
+    if isinstance(compositor, CageCompositor):
+        compositor.set_log_dir(cfg["_log_dir"])
 
     # Setup file logging
     log_level = cfg.get("log", {}).get("level", "info").upper()
@@ -375,6 +388,22 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                     },
                 },
             ),
+            Tool(
+                name="clipboard_read",
+                description="Read text from the compositor's X11 clipboard",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            Tool(
+                name="clipboard_write",
+                description="Write text to the compositor's X11 clipboard",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "Text to write to clipboard"},
+                    },
+                    "required": ["text"],
+                },
+            ),
         ]
 
         for name, tdef in script_tools.items():
@@ -504,6 +533,16 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 arguments.get("test_key", "a"),
                 arguments.get("target", "xev"),
             )
+            return [TextContent(type="text", text=str(result))]
+
+        if name == "clipboard_read":
+            result = compositor.clipboard_read()
+            if "error" in result:
+                return [TextContent(type="text", text=result["error"])]
+            return [TextContent(type="text", text=result["text"])]
+
+        if name == "clipboard_write":
+            result = compositor.clipboard_write(arguments["text"])
             return [TextContent(type="text", text=str(result))]
 
         # Script-mapped tools
