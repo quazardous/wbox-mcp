@@ -36,6 +36,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
     screen = cfg.get("screen", "1280x800")
     instance_name = cfg.get("name", "")
     timeouts = cfg.get("timeouts", {})
+    input_backend = cfg.get("input_backend", "x11")
 
     if backend == "weston":
         return WestonCompositor(
@@ -44,12 +45,14 @@ def build_compositor(cfg: dict) -> CompositorServer:
             backend=cfg.get("weston_backend", "wayland"),
             instance_name=instance_name,
             timeouts=timeouts,
+            input_backend=input_backend,
         )
     else:
         comp = CageCompositor(
             screen=screen,
             instance_name=instance_name,
             timeouts=timeouts,
+            input_backend=input_backend,
         )
         return comp
 
@@ -144,6 +147,9 @@ async def _run_script_tool(
     f.write(f"\n--- output ---\n")
     f.flush()
 
+    # Timeout: per-tool > global config > 120s default
+    timeout = tool_def.get("timeout", cfg.get("tool_timeout", 120))
+
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -153,23 +159,48 @@ async def _run_script_tool(
     )
 
     stdout_lines = []
-    while True:
-        line = await proc.stdout.readline()
-        if not line:
-            break
-        text = line.decode(errors="replace")
-        stdout_lines.append(text)
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        f.write(f"[{ts}] {text}")
-        f.flush()
+    timed_out = False
+    try:
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+            except asyncio.TimeoutError:
+                timed_out = True
+                break
+            if not line:
+                break
+            text = line.decode(errors="replace")
+            stdout_lines.append(text)
+            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            f.write(f"[{ts}] {text}")
+            f.flush()
+    except Exception as exc:
+        f.write(f"\n--- exception: {exc} ---\n")
 
-    await proc.wait()
+    if timed_out:
+        f.write(f"\n--- TIMEOUT after {timeout}s, killing ---\n")
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+
+    if proc.returncode is None:
+        await proc.wait()
+
     stdout_text = "".join(stdout_lines)
 
     end = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     f.write(f"\n--- finished: {end}, exit_code: {proc.returncode} ---\n")
     f.close()
 
+    if timed_out:
+        return f"Script timed out after {timeout}s (killed)\n{stdout_text}\n(full log: {logfile})"
     if proc.returncode != 0:
         return f"Script exited with code {proc.returncode}\n{stdout_text}\n(full log: {logfile})"
     return stdout_text or "(no output)"

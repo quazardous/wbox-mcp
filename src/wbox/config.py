@@ -16,6 +16,7 @@ DEFAULT_CONFIG = {
     "screen": "1280x800",
     "weston_shell": "kiosk",
     "weston_backend": "x11",
+    "input_backend": "x11",  # "x11" (xdotool) or "wayland" (wtype/ydotool)
     "log": {
         "dir": "./log",
         "level": "info",
@@ -25,6 +26,7 @@ DEFAULT_CONFIG = {
         "wayland_display": 10,
         "xwayland_display": 15,
         "app_render": 3,
+        "stop": 10,
     },
     "app": {
         "command": "",

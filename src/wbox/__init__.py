@@ -1,3 +1,3 @@
 """wbox-mcp — Wayland/X11 box for GUI automation via MCP."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

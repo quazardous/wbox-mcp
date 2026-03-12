@@ -7,6 +7,22 @@
   Format: https://semver.org
 -->
 
+## [0.4.0] - 2026-03-12
+
+### Added
+
+- **Native Wayland input backend**: new `input_backend: "wayland"` config option — uses `wtype` for keyboard input and `ydotool` for mouse, bypassing Xwayland entirely
+- **Wayland clipboard support**: `clipboard_read`/`clipboard_write` now work with `wl-paste`/`wl-copy` when using the wayland input backend
+- **Deterministic Wayland socket naming** (Weston): socket is now `wbox-<instance>` instead of auto-assigned `wayland-N`, eliminating collisions between concurrent instances
+- **Script tool timeout**: custom script tools now respect a configurable timeout (`timeout` per tool, or global `tool_timeout`) — kills runaway scripts instead of hanging forever
+- **Zombie process detection**: `_pid_alive()` now checks `/proc/<pid>/status` to detect zombie processes that fool `kill -0`
+
+### Changed
+
+- **Graceful stop with escalation**: `stop()` sends SIGTERM, waits up to `timeouts.stop` (default 10s), then escalates to SIGKILL — returns `"force_killed"` status when needed
+- **Robust socket cleanup**: X11 lock file PID is checked before removing sockets; deterministic Wayland sockets are also cleaned; sockets are cleaned on both `stop()` and `kill()`
+- setup.sh now lists `wtype`, `ydotool`, and `wl-clipboard` as optional dependencies
+
 ## [0.3.0] - 2026-03-11
 
 ### Added
