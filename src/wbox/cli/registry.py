@@ -12,10 +12,11 @@ Usage:
 
 Init options (non-interactive mode):
     --name NAME              Instance name
-    --compositor TYPE        weston or cage
-    --screen WxH             Screen size (e.g. 1280x800)
-    --weston-backend TYPE    wayland or x11
-    --weston-shell TYPE      kiosk or desktop
+    --compositor TYPE        weston, cage, or win32
+    --screen WxH             Screen size (e.g. 1280x800) — Linux only
+    --weston-backend TYPE    wayland or x11 — Linux only
+    --weston-shell TYPE      kiosk or desktop — Linux only
+    --title-hint TEXT        Window title substring — Windows only
     --app-command CMD        App command to launch
     --app-env KEY=VALUE      Environment variable (repeatable)
     --pre-launch CMD         Pre-launch script (repeatable)
@@ -43,6 +44,8 @@ from pathlib import Path
 import yaml
 
 from wbox.config import DEFAULT_CONFIG, load_config, save_config
+
+_IS_WIN32 = sys.platform == "win32"
 
 
 def _is_interactive() -> bool:
@@ -118,7 +121,13 @@ def _detect_wbox_command() -> tuple[str, list[str]]:
         return "wbox-mcp", ["serve"]
     # 2. Dev mode — absolute path to venv binary
     venv_bin = Path(sys.executable).parent / "wbox-mcp"
-    if venv_bin.exists():
+    if _IS_WIN32:
+        # Windows: check for .exe or .cmd shim
+        for ext in (".exe", ".cmd", ""):
+            candidate = venv_bin.with_suffix(ext)
+            if candidate.exists():
+                return str(candidate.resolve()), ["serve"]
+    elif venv_bin.exists():
         return str(venv_bin.resolve()), ["serve"]
     # 3. Fallback: uvx
     return "uvx", ["wbox-mcp", "serve"]
@@ -164,6 +173,8 @@ def _parse_init_args(args: list[str]) -> tuple[str | None, dict]:
             flags["weston_backend"] = args[i + 1]; i += 2
         elif a == "--weston-shell":
             flags["weston_shell"] = args[i + 1]; i += 2
+        elif a == "--title-hint":
+            flags["title_hint"] = args[i + 1]; i += 2
         elif a == "--app-command":
             flags["app_command"] = args[i + 1]; i += 2
         elif a == "--app-env":
@@ -261,15 +272,32 @@ def _init_interactive(cfg: dict, config_path: Path):
         print("Creating new wbox-mcp instance.\n")
 
     cfg["name"] = _prompt("Instance name", cfg.get("name", "my-wbox"))
-    cfg["compositor"] = _prompt("Compositor [weston/cage]", cfg.get("compositor", "weston"))
-    cfg["screen"] = _prompt("Screen size", cfg.get("screen", "1280x800"))
 
-    if cfg["compositor"] == "weston":
-        cfg["weston_shell"] = _prompt("Weston shell [kiosk/desktop]", cfg.get("weston_shell", "kiosk"))
-        cfg["weston_backend"] = _prompt("Weston backend [wayland/x11]", cfg.get("weston_backend", "x11"))
-    else:
+    if _IS_WIN32:
+        # Windows: compositor is always win32
+        cfg["compositor"] = "win32"
+        print(f"  Compositor: win32 (auto-detected)")
+        # Remove Linux-only keys
+        cfg.pop("screen", None)
         cfg.pop("weston_shell", None)
         cfg.pop("weston_backend", None)
+
+        # title_hint — helps find the right window
+        cfg["title_hint"] = _prompt(
+            "Window title hint (substring to match)",
+            cfg.get("title_hint", ""),
+        )
+    else:
+        # Linux: choose compositor
+        cfg["compositor"] = _prompt("Compositor [weston/cage]", cfg.get("compositor", "weston"))
+        cfg["screen"] = _prompt("Screen size", cfg.get("screen", "1280x800"))
+
+        if cfg["compositor"] == "weston":
+            cfg["weston_shell"] = _prompt("Weston shell [kiosk/desktop]", cfg.get("weston_shell", "kiosk"))
+            cfg["weston_backend"] = _prompt("Weston backend [wayland/x11]", cfg.get("weston_backend", "x11"))
+        else:
+            cfg.pop("weston_shell", None)
+            cfg.pop("weston_backend", None)
 
     # App
     app_cfg = cfg.get("app", {})
@@ -289,21 +317,22 @@ def _init_interactive(cfg: dict, config_path: Path):
             app_cfg["env"] = _prompt_env()
     cfg["app"] = app_cfg
 
-    # Pre-launch hooks
-    pre = app_cfg.get("pre_launch", [])
-    if _prompt_yn("Configure pre-launch scripts?", default=bool(pre)):
-        if pre:
-            print(f"  Current pre-launch: {pre}")
-            if _prompt_yn("  Replace?"):
-                pre = []
-        print("  Pre-launch scripts (shell commands, empty line to finish):")
-        while True:
-            raw = input("    > ").strip()
-            if not raw:
-                break
-            pre.append(raw)
-        app_cfg["pre_launch"] = pre
-    cfg["app"] = app_cfg
+    if not _IS_WIN32:
+        # Pre-launch hooks (Linux only — runs in compositor env)
+        pre = app_cfg.get("pre_launch", [])
+        if _prompt_yn("Configure pre-launch scripts?", default=bool(pre)):
+            if pre:
+                print(f"  Current pre-launch: {pre}")
+                if _prompt_yn("  Replace?"):
+                    pre = []
+            print("  Pre-launch scripts (shell commands, empty line to finish):")
+            while True:
+                raw = input("    > ").strip()
+                if not raw:
+                    break
+                pre.append(raw)
+            app_cfg["pre_launch"] = pre
+        cfg["app"] = app_cfg
 
     # Log
     log_cfg = cfg.get("log", {})
@@ -315,6 +344,24 @@ def _init_interactive(cfg: dict, config_path: Path):
 
     # Screenshots
     cfg["screenshot_dir"] = _prompt("Screenshot directory", cfg.get("screenshot_dir", "./screenshots"))
+
+    # Windows timeouts
+    if _IS_WIN32:
+        timeouts = cfg.get("timeouts", {})
+        if _prompt_yn("Configure timeouts?", default=False):
+            timeouts["window_discovery"] = int(_prompt(
+                "Window discovery timeout (seconds)",
+                str(timeouts.get("window_discovery", 10)),
+            ))
+            timeouts["edit_control"] = int(_prompt(
+                "Edit control timeout (seconds)",
+                str(timeouts.get("edit_control", 3)),
+            ))
+            timeouts["app_render"] = int(_prompt(
+                "App render delay (seconds)",
+                str(timeouts.get("app_render", 3)),
+            ))
+        cfg["timeouts"] = timeouts
 
     # Tools
     if _prompt_yn("Add custom script tools?", default=False):
@@ -332,12 +379,16 @@ def _init_noninteractive(cfg: dict, flags: dict):
         cfg["name"] = flags["name"]
     if "compositor" in flags:
         cfg["compositor"] = flags["compositor"]
+    elif _IS_WIN32 and "compositor" not in cfg:
+        cfg["compositor"] = "win32"
     if "screen" in flags:
         cfg["screen"] = flags["screen"]
     if "weston_backend" in flags:
         cfg["weston_backend"] = flags["weston_backend"]
     if "weston_shell" in flags:
         cfg["weston_shell"] = flags["weston_shell"]
+    if "title_hint" in flags:
+        cfg["title_hint"] = flags["title_hint"]
 
     # App
     app_cfg = cfg.get("app", {})
@@ -376,11 +427,12 @@ def _init_noninteractive(cfg: dict, flags: dict):
 def _wizard_add_tools(cfg: dict):
     """Interactive loop to add script tools."""
     tools = cfg.get("tools", {})
+    script_ext = ".ps1" if _IS_WIN32 else ".sh"
     while True:
         name = _prompt("Tool name (empty to stop)", "")
         if not name:
             break
-        script = _prompt(f"  Script path for '{name}'", f"./scripts/{name}.sh")
+        script = _prompt(f"  Script path for '{name}'", f"./scripts/{name}{script_ext}")
         description = _prompt(f"  Description", f"Custom tool: {name}")
 
         tools[name] = {
@@ -392,7 +444,16 @@ def _wizard_add_tools(cfg: dict):
         script_path = Path(cfg.get("_config_dir", ".")) / script
         if not script_path.exists():
             script_path.parent.mkdir(parents=True, exist_ok=True)
-            script_path.write_text(f"""#!/usr/bin/env bash
+            if _IS_WIN32:
+                script_path.write_text(f"""# {name} — {description}
+#
+# Custom tool script for wbox-mcp (Windows)
+#
+
+Write-Host "{name}: not implemented yet"
+""")
+            else:
+                script_path.write_text(f"""#!/usr/bin/env bash
 # {name} — {description}
 #
 # Available env vars:
@@ -403,7 +464,7 @@ set -euo pipefail
 
 echo "{name}: not implemented yet"
 """)
-            script_path.chmod(0o755)
+                script_path.chmod(0o755)
             print(f"  Created template: {script_path}")
 
         if not _prompt_yn("  Add another tool?"):
@@ -428,7 +489,8 @@ def cmd_tool_add(directory: str | None = None):
     if name in tools:
         print(f"  Tool '{name}' already exists. Overwriting.")
 
-    script = _prompt(f"Script path", f"./scripts/{name}.sh")
+    script_ext = ".ps1" if _IS_WIN32 else ".sh"
+    script = _prompt(f"Script path", f"./scripts/{name}{script_ext}")
     description = _prompt(f"Description", f"Custom tool: {name}")
 
     tools[name] = {
@@ -444,7 +506,16 @@ def cmd_tool_add(directory: str | None = None):
     script_path = base / script
     if not script_path.exists():
         script_path.parent.mkdir(parents=True, exist_ok=True)
-        script_path.write_text(f"""#!/usr/bin/env bash
+        if _IS_WIN32:
+            script_path.write_text(f"""# {name} — {description}
+#
+# Custom tool script for wbox-mcp (Windows)
+#
+
+Write-Host "{name}: not implemented yet"
+""")
+        else:
+            script_path.write_text(f"""#!/usr/bin/env bash
 # {name} — {description}
 #
 # Available env vars:
@@ -455,7 +526,7 @@ set -euo pipefail
 
 echo "{name}: not implemented yet"
 """)
-        script_path.chmod(0o755)
+            script_path.chmod(0o755)
         print(f"Created template: {script_path}")
 
 
@@ -490,8 +561,9 @@ def cmd_tool_list(directory: str | None = None):
 
     builtins = [
         "launch", "stop", "kill", "screenshot", "click", "type_text",
-        "key", "keys", "mouse_move", "get_size", "resize", "clean",
-        "tail_log", "debug_input",
+        "key", "keys", "mouse_move", "get_size", "resize",
+        "clipboard_read", "clipboard_write",
+        "clean", "tail_log", "debug_input",
     ]
     print("Built-in tools:")
     for t in builtins:

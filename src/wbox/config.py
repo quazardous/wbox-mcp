@@ -10,28 +10,42 @@ from pathlib import Path
 
 import yaml
 
+import sys
+
+_IS_WIN32 = sys.platform == "win32"
+
 DEFAULT_CONFIG = {
     "name": "my-wbox",
-    "compositor": "weston",
+    "compositor": "win32" if _IS_WIN32 else "weston",
     "screen": "1280x800",
-    "weston_shell": "kiosk",
-    "weston_backend": "x11",
+    **({} if _IS_WIN32 else {
+        "weston_shell": "kiosk",
+        "weston_backend": "x11",
+    }),
     "log": {
         "dir": "./log",
         "level": "info",
     },
     "screenshot_dir": "./screenshots",
     "timeouts": {
-        "wayland_display": 10,
-        "xwayland_display": 15,
+        **({
+            "window_discovery": 10,
+            "edit_control": 3,
+        } if _IS_WIN32 else {
+            "wayland_display": 10,
+            "xwayland_display": 15,
+        }),
         "app_render": 3,
     },
+    "title_hint": "" if _IS_WIN32 else None,
     "app": {
         "command": "",
         "env": {},
     },
     "tools": {},
 }
+# Remove None values
+DEFAULT_CONFIG = {k: v for k, v in DEFAULT_CONFIG.items() if v is not None}
 
 
 def load_config(path: str | Path) -> dict:

@@ -24,7 +24,9 @@ from mcp.types import (
     Tool,
 )
 
-from .compositor import CageCompositor, CompositorServer, WestonCompositor
+import sys
+
+from .compositor import CompositorServer
 from .config import load_config, resolve_dir
 
 log = logging.getLogger(__name__)
@@ -32,12 +34,23 @@ log = logging.getLogger(__name__)
 
 def build_compositor(cfg: dict) -> CompositorServer:
     """Build a compositor backend from config."""
-    backend = cfg.get("compositor", "cage")
+    # Auto-detect backend on Windows if not specified
+    default_backend = "win32" if sys.platform == "win32" else "cage"
+    backend = cfg.get("compositor", default_backend)
     screen = cfg.get("screen", "1280x800")
     instance_name = cfg.get("name", "")
     timeouts = cfg.get("timeouts", {})
 
-    if backend == "weston":
+    if backend == "win32":
+        from .compositor.win32 import Win32Compositor
+        return Win32Compositor(
+            screen=screen,
+            instance_name=instance_name,
+            timeouts=timeouts,
+            title_hint=cfg.get("title_hint", ""),
+        )
+    elif backend == "weston":
+        from .compositor.weston import WestonCompositor
         return WestonCompositor(
             screen=screen,
             shell=cfg.get("weston_shell", "kiosk"),
@@ -46,12 +59,12 @@ def build_compositor(cfg: dict) -> CompositorServer:
             timeouts=timeouts,
         )
     else:
-        comp = CageCompositor(
+        from .compositor.cage import CageCompositor
+        return CageCompositor(
             screen=screen,
             instance_name=instance_name,
             timeouts=timeouts,
         )
-        return comp
 
 
 def _build_app_cmd(cfg: dict) -> list[str]:
@@ -190,8 +203,10 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
     compositor.state.screenshot_dir = cfg["_screenshot_dir"]
 
     # Set cage log dir for stderr capture
-    if isinstance(compositor, CageCompositor):
-        compositor.set_log_dir(cfg["_log_dir"])
+    if sys.platform != "win32":
+        from .compositor.cage import CageCompositor
+        if isinstance(compositor, CageCompositor):
+            compositor.set_log_dir(cfg["_log_dir"])
 
     # Setup file logging
     log_level = cfg.get("log", {}).get("level", "info").upper()
@@ -512,11 +527,18 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
             ]:
                 if d and d.exists():
                     count = 0
+                    skipped = 0
                     for f in d.iterdir():
                         if f.is_file():
-                            f.unlink()
-                            count += 1
-                    cleaned.append(f"{label}: {count} files removed")
+                            try:
+                                f.unlink()
+                                count += 1
+                            except PermissionError:
+                                skipped += 1
+                    msg = f"{label}: {count} files removed"
+                    if skipped:
+                        msg += f" ({skipped} locked, skipped)"
+                    cleaned.append(msg)
             return [TextContent(type="text", text="\n".join(cleaned) or "nothing to clean")]
 
         if name == "tail_log":

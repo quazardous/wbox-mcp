@@ -7,3 +7,4 @@ build/
 log/
 screenshots/
 .mcp.json
+.claude/settings.local.json

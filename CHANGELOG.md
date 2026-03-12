@@ -7,6 +7,28 @@
   Format: https://semver.org
 -->
 
+## [0.4.0] - 2026-03-12
+
+### Added
+
+- **Windows Win32 backend**: full MCP server for Windows — launch any app and control it via screenshots, keyboard, mouse using Win32 APIs (PrintWindow, PostMessage, SendInput)
+- **setup.ps1**: Windows installer — auto-installs Python/uv/git via winget, creates .cmd shims, updates PATH
+- **Platform-aware wizard**: `wboxr init` adapts to the platform — auto-detects `win32` on Windows, asks for `title_hint` and timeouts instead of compositor/screen/weston options
+- **`--title-hint`**: CLI flag for non-interactive init on Windows
+- **XAML ContentDialog detection**: detects WinUI3 modal overlays (DesktopChildSiteBridge) and reports `modal_visible` in screenshot/debug responses
+- **SendInput mouse fallback**: clicks on WinUI3/XAML elements (menus, tabs, dialogs) that lack child HWNDs automatically use SendInput with absolute screen coordinates
+- **Win32 clipboard tools**: `clipboard_read` and `clipboard_write` via native Win32 API (no external tools needed)
+
+### Changed
+
+- **`type_text` uses clipboard+paste on Windows**: Ctrl+V via SendInput always targets the active tab/document (fixes WinUI3 multi-tab apps like Notepad Win11)
+- **`click` hybrid routing**: PostMessage for edit control (background), SendInput for everything else (menus, tabs, dialogs)
+- **`key` modal routing**: automatically uses SendInput when a modal dialog (classic or XAML) is visible
+- **`kill` finds real PID via HWND**: uses `GetWindowThreadProcessId` + stored PID to kill re-parented child processes (Win11 Notepad, etc.) — no more orphan processes
+- **`clean` tolerates locked files**: skips files held by the running MCP server instead of crashing
+- **Platform-conditional imports**: compositor modules loaded only on their target platform
+- **README rewritten**: dual Linux/Windows documentation, init flags table, platform-specific config examples
+
 ## [0.3.0] - 2026-03-11
 
 ### Added
