@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
     **({} if _IS_WIN32 else {
         "weston_shell": "kiosk",
         "weston_backend": "x11",
+        "input_backend": "x11",  # "x11" (xdotool) or "wayland" (wtype/ydotool)
     }),
     "log": {
         "dir": "./log",
@@ -36,6 +37,7 @@ DEFAULT_CONFIG = {
             "xwayland_display": 15,
         }),
         "app_render": 3,
+        "stop": 10,
     },
     "title_hint": "" if _IS_WIN32 else None,
     "app": {

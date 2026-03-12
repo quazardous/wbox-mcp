@@ -18,6 +18,11 @@
 - **XAML ContentDialog detection**: detects WinUI3 modal overlays (DesktopChildSiteBridge) and reports `modal_visible` in screenshot/debug responses
 - **SendInput mouse fallback**: clicks on WinUI3/XAML elements (menus, tabs, dialogs) that lack child HWNDs automatically use SendInput with absolute screen coordinates
 - **Win32 clipboard tools**: `clipboard_read` and `clipboard_write` via native Win32 API (no external tools needed)
+- **Native Wayland input backend**: new `input_backend: "wayland"` config option — uses `wtype` for keyboard input and `ydotool` for mouse, bypassing Xwayland entirely
+- **Wayland clipboard support**: `clipboard_read`/`clipboard_write` now work with `wl-paste`/`wl-copy` when using the wayland input backend
+- **Deterministic Wayland socket naming** (Weston): socket is now `wbox-<instance>` instead of auto-assigned `wayland-N`, eliminating collisions between concurrent instances
+- **Script tool timeout**: custom script tools now respect a configurable timeout (`timeout` per tool, or global `tool_timeout`) — kills runaway scripts instead of hanging forever
+- **Zombie process detection**: `_pid_alive()` now checks `/proc/<pid>/status` to detect zombie processes that fool `kill -0`
 
 ### Changed
 
@@ -28,6 +33,9 @@
 - **`clean` tolerates locked files**: skips files held by the running MCP server instead of crashing
 - **Platform-conditional imports**: compositor modules loaded only on their target platform
 - **README rewritten**: dual Linux/Windows documentation, init flags table, platform-specific config examples
+- **Graceful stop with escalation**: `stop()` sends SIGTERM, waits up to `timeouts.stop` (default 10s), then escalates to SIGKILL — returns `"force_killed"` status when needed
+- **Robust socket cleanup**: X11 lock file PID is checked before removing sockets; deterministic Wayland sockets are also cleaned; sockets are cleaned on both `stop()` and `kill()`
+- setup.sh now lists `wtype`, `ydotool`, and `wl-clipboard` as optional dependencies
 
 ## [0.3.0] - 2026-03-11
 

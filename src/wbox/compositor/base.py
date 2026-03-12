@@ -27,9 +27,16 @@ log = logging.getLogger(__name__)
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
-        return True
     except (ProcessLookupError, PermissionError):
         return False
+    # Check for zombie — kill -0 succeeds but process is defunct
+    try:
+        status = Path(f"/proc/{pid}/status").read_text()
+        if "\nState:\tZ" in status:
+            return False
+    except OSError:
+        pass
+    return True
 
 
 @dataclass
@@ -93,12 +100,15 @@ class CompositorServer:
     """
 
     compositor_name: str = "compositor"
+    # Subclasses can set this to get deterministic wayland socket naming
+    wayland_socket_name: str = ""
 
     def __init__(self, *, screen: str = "1280x800", instance_name: str = "",
-                 timeouts: dict | None = None):
+                 timeouts: dict | None = None, input_backend: str = "x11"):
         self.screen = screen
         self.instance_name = instance_name
         self.timeouts = timeouts or {}
+        self.input_backend = input_backend  # "x11" (xdotool) or "wayland" (wtype/ydotool)
         # Use instance name for state file if available, else compositor name
         state_id = instance_name or self.compositor_name
         self._state_file = Path(tempfile.gettempdir()) / f"wbox_{state_id}_state.json"
@@ -157,18 +167,24 @@ class CompositorServer:
 
         self._clean_stale_sockets()
 
-        # Snapshot existing displays before launch
-        runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-        wl_before = set(Path(runtime_dir).glob("wayland-[0-9]"))
+        # Snapshot existing X11 displays before launch (can't control X display number)
         x11_dir = Path("/tmp/.X11-unix")
         x11_before = set(x11_dir.glob("X*")) if x11_dir.exists() else set()
+
+        # For wayland: snapshot only needed if no deterministic socket name
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        wl_before = set() if self.wayland_socket_name else set(Path(runtime_dir).glob("wayland-*"))
 
         # Start compositor
         self._start_compositor(app_cmd, app_env, wl_before, x11_before)
 
         # Wait for compositor's Wayland display
         wl_timeout = self.timeouts.get("wayland_display", 10)
-        wayland_display = self._wait_for_wayland_display(wl_before, timeout=wl_timeout)
+        if self.wayland_socket_name:
+            wayland_display = self._wait_for_named_socket(
+                Path(runtime_dir) / self.wayland_socket_name, timeout=wl_timeout)
+        else:
+            wayland_display = self._wait_for_wayland_display(wl_before, timeout=wl_timeout)
         if not wayland_display:
             return {
                 "error": f"{self.compositor_name} Wayland display did not appear in time (timeout={wl_timeout}s)",
@@ -245,21 +261,36 @@ class CompositorServer:
         if not pid:
             return {"status": "not_running"}
 
+        timeout = self.timeouts.get("stop", 10)
+        force_killed = False
+
         try:
             os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass  # already dead
+        else:
+            # Wait up to timeout for graceful shutdown
             if self.state.compositor_proc:
-                self.state.compositor_proc.wait(timeout=10)
+                try:
+                    self.state.compositor_proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    pass
             else:
-                for _ in range(20):
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
                     if not _pid_alive(pid):
                         break
                     time.sleep(0.5)
-        except (ProcessLookupError, subprocess.TimeoutExpired):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
 
+            # Escalate to SIGKILL if still alive
+            if _pid_alive(pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    force_killed = True
+                except ProcessLookupError:
+                    pass
+
+        self._clean_stale_sockets()
         self.state.compositor_proc = None
         self.state.compositor_pid = 0
         self.state.app_proc = None
@@ -267,7 +298,8 @@ class CompositorServer:
         self.state.wayland_display = ""
         self.state.x_display = ""
         self.state.clear(self._state_file)
-        return {"status": "stopped", "pid": pid}
+        status = "force_killed" if force_killed else "stopped"
+        return {"status": status, "pid": pid}
 
     def kill(self, aggressive: bool = True) -> dict:
         """Force-kill compositor by PID and clean state."""
@@ -301,6 +333,7 @@ class CompositorServer:
                     pass
 
         time.sleep(1)
+        self._clean_stale_sockets()
         self.state.compositor_proc = None
         self.state.compositor_pid = 0
         self.state.app_proc = None
@@ -362,6 +395,8 @@ class CompositorServer:
     def click(self, x: int, y: int, button: int = 1) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
+        if self.input_backend == "wayland":
+            return self._wl_click(x, y, button)
         self._xdotool("mousemove", str(x), str(y))
         time.sleep(0.05)
         return self._xdotool("click", str(button))
@@ -369,48 +404,66 @@ class CompositorServer:
     def type_text(self, text: str, delay_ms: int = 12) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
+        if self.input_backend == "wayland":
+            return self._wl_type(text, delay_ms)
         self._focus_active_window()
         return self._xdotool("type", "--delay", str(delay_ms), "--", text)
 
     def key(self, shortcut: str) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
+        if self.input_backend == "wayland":
+            return self._wl_key(shortcut)
         self._focus_active_window()
         return self._xdotool("key", "--", shortcut)
 
     def mouse_move(self, x: int, y: int) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
+        if self.input_backend == "wayland":
+            return self._wl_mouse_move(x, y)
         return self._xdotool("mousemove", str(x), str(y))
 
     # ── Clipboard ────────────────────────────────────────────────────
 
     def _clipboard_env(self) -> dict | None:
         """Build env dict for clipboard operations, or None if not available."""
-        if not self.state.x_display:
-            self.reload_state()
-        if not self.state.x_display:
-            return None
         env = os.environ.copy()
-        env["DISPLAY"] = self.state.x_display
+        if self.input_backend == "wayland":
+            if not self.state.wayland_display:
+                self.reload_state()
+            if not self.state.wayland_display:
+                return None
+            env["WAYLAND_DISPLAY"] = self.state.wayland_display
+        else:
+            if not self.state.x_display:
+                self.reload_state()
+            if not self.state.x_display:
+                return None
+            env["DISPLAY"] = self.state.x_display
         return env
 
     def clipboard_read(self) -> dict:
-        """Read text from the X11 clipboard."""
+        """Read text from the clipboard."""
         if not self.is_running():
             return {"error": "compositor is not running"}
         env = self._clipboard_env()
         if not env:
-            return {"error": "no x_display available"}
+            return {"error": "no display available"}
 
         import shutil
-        # Try xsel first (doesn't block), then xclip
-        if shutil.which("xsel"):
-            cmd = ["xsel", "--clipboard", "--output"]
-        elif shutil.which("xclip"):
-            cmd = ["xclip", "-selection", "clipboard", "-o"]
+        if self.input_backend == "wayland":
+            if shutil.which("wl-paste"):
+                cmd = ["wl-paste", "--no-newline"]
+            else:
+                return {"error": "wl-paste not found — install wl-clipboard"}
         else:
-            return {"error": "no clipboard tool found — install xclip or xsel"}
+            if shutil.which("xsel"):
+                cmd = ["xsel", "--clipboard", "--output"]
+            elif shutil.which("xclip"):
+                cmd = ["xclip", "-selection", "clipboard", "-o"]
+            else:
+                return {"error": "no clipboard tool found — install xclip or xsel"}
 
         result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=5)
         if result.returncode != 0:
@@ -418,32 +471,38 @@ class CompositorServer:
         return {"text": result.stdout}
 
     def clipboard_write(self, text: str) -> dict:
-        """Write text to the X11 clipboard."""
+        """Write text to the clipboard."""
         if not self.is_running():
             return {"error": "compositor is not running"}
         env = self._clipboard_env()
         if not env:
-            return {"error": "no x_display available"}
+            return {"error": "no display available"}
 
         import shutil
-        if shutil.which("xsel"):
-            cmd = ["xsel", "--clipboard", "--input"]
-            result = subprocess.run(cmd, input=text, env=env, capture_output=True, text=True, timeout=5)
-            if result.returncode != 0:
-                return {"error": f"xsel write failed: {result.stderr.strip()}"}
-        elif shutil.which("xclip"):
-            # xclip forks a daemon to own the clipboard — run it detached
-            proc = subprocess.Popen(
-                ["xclip", "-selection", "clipboard"],
-                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                env=env,
-            )
-            proc.stdin.write(text.encode())
-            proc.stdin.close()
-            # Don't wait — xclip stays alive as clipboard owner until
-            # another process claims the clipboard. This is expected.
+        if self.input_backend == "wayland":
+            if shutil.which("wl-copy"):
+                cmd = ["wl-copy", "--"]
+                result = subprocess.run(cmd + [text], env=env, capture_output=True, text=True, timeout=5)
+                if result.returncode != 0:
+                    return {"error": f"wl-copy failed: {result.stderr.strip()}"}
+            else:
+                return {"error": "wl-copy not found — install wl-clipboard"}
         else:
-            return {"error": "no clipboard tool found — install xclip or xsel"}
+            if shutil.which("xsel"):
+                cmd = ["xsel", "--clipboard", "--input"]
+                result = subprocess.run(cmd, input=text, env=env, capture_output=True, text=True, timeout=5)
+                if result.returncode != 0:
+                    return {"error": f"xsel write failed: {result.stderr.strip()}"}
+            elif shutil.which("xclip"):
+                proc = subprocess.Popen(
+                    ["xclip", "-selection", "clipboard"],
+                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                    env=env,
+                )
+                proc.stdin.write(text.encode())
+                proc.stdin.close()
+            else:
+                return {"error": "no clipboard tool found — install xclip or xsel"}
 
         return {"ok": True, "length": len(text)}
 
@@ -489,6 +548,73 @@ class CompositorServer:
         )
         if result.returncode != 0:
             return {"error": f"xdotool failed (DISPLAY={self.state.x_display}): {result.stderr.strip()}"}
+        return {"ok": True}
+
+    # ── Wayland input helpers ─────────────────────────────────────
+
+    def _wl_env(self) -> dict:
+        env = os.environ.copy()
+        env["WAYLAND_DISPLAY"] = self.state.wayland_display
+        return env
+
+    def _wl_key(self, shortcut: str) -> dict:
+        """Send key via wtype. Translates xdotool-style shortcuts to wtype format."""
+        if not self.state.wayland_display:
+            self.reload_state()
+        if not self.state.wayland_display:
+            return {"error": "no wayland_display available"}
+        env = self._wl_env()
+        # wtype uses -M for modifier down, -m for modifier up, -k for key
+        # Convert xdotool "ctrl+shift+a" → wtype -M ctrl -M shift -k a -m shift -m ctrl
+        parts = shortcut.split("+")
+        key = parts[-1]
+        modifiers = parts[:-1]
+        cmd = ["wtype"]
+        for m in modifiers:
+            cmd.extend(["-M", m])
+        cmd.extend(["-k", key])
+        for m in reversed(modifiers):
+            cmd.extend(["-m", m])
+        log.debug("wtype cmd=%s", cmd)
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            return {"error": f"wtype failed: {result.stderr.strip()}"}
+        return {"ok": True}
+
+    def _wl_type(self, text: str, delay_ms: int = 12) -> dict:
+        """Type text via wtype."""
+        if not self.state.wayland_display:
+            self.reload_state()
+        if not self.state.wayland_display:
+            return {"error": "no wayland_display available"}
+        env = self._wl_env()
+        cmd = ["wtype", "-d", str(delay_ms), "--", text]
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return {"error": f"wtype failed: {result.stderr.strip()}"}
+        return {"ok": True}
+
+    def _wl_click(self, x: int, y: int, button: int = 1) -> dict:
+        """Click via ydotool (works on Wayland via /dev/uinput)."""
+        self._wl_mouse_move(x, y)
+        time.sleep(0.05)
+        # ydotool button codes: 0x00=left, 0x01=right, 0x02=middle
+        btn_map = {1: "0x00", 2: "0x02", 3: "0x01"}
+        btn_code = btn_map.get(button, "0x00")
+        cmd = ["ydotool", "click", btn_code]
+        log.debug("ydotool click cmd=%s", cmd)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            return {"error": f"ydotool click failed: {result.stderr.strip()}"}
+        return {"ok": True}
+
+    def _wl_mouse_move(self, x: int, y: int) -> dict:
+        """Move mouse via ydotool."""
+        cmd = ["ydotool", "mousemove", "--absolute", "-x", str(x), "-y", str(y)]
+        log.debug("ydotool mousemove cmd=%s", cmd)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            return {"error": f"ydotool mousemove failed: {result.stderr.strip()}"}
         return {"ok": True}
 
     # ── Input debugging ────────────────────────────────────────────
@@ -576,9 +702,21 @@ class CompositorServer:
             "xev_output": output,
         }
 
+    def _wait_for_named_socket(self, sock_path: Path, timeout: float = 10) -> str:
+        """Wait for a specific socket file to appear."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.state.compositor_proc and self.state.compositor_proc.poll() is not None:
+                return ""
+            if sock_path.exists():
+                return sock_path.name
+            time.sleep(0.3)
+        return ""
+
     def _wait_for_wayland_display(
         self, before: set[Path], timeout: float = 10,
     ) -> str:
+        """Fallback: wait for a new wayland-N socket to appear."""
         runtime_dir = Path(
             os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
         )
@@ -586,7 +724,7 @@ class CompositorServer:
         while time.time() < deadline:
             if self.state.compositor_proc and self.state.compositor_proc.poll() is not None:
                 return ""
-            current = set(runtime_dir.glob("wayland-[0-9]"))
+            current = set(runtime_dir.glob("wayland-*"))
             new = current - before
             if new:
                 return sorted(new)[0].name
@@ -612,36 +750,60 @@ class CompositorServer:
         return ""
 
     def _clean_stale_sockets(self):
-        # Only clean sockets that belonged to this instance (from state file).
-        # Do NOT blindly clean all sockets — other wbox instances may be using them.
+        """Clean sockets/locks that belonged to this instance.
+
+        Uses state file (x_display, wayland_display) and deterministic
+        wayland_socket_name. Never touches sockets from other instances.
+        """
         wl_display = self.state.wayland_display
         x_display = self.state.x_display
-
-        if not wl_display and not x_display:
-            return
 
         runtime_dir = Path(
             os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
         )
 
+        # Clean wayland socket: both from state and deterministic name
+        wl_names = set()
         if wl_display:
-            sock = runtime_dir / wl_display
-            lock = runtime_dir / f"{wl_display}.lock"
-            if sock.exists():
-                try:
-                    sock.unlink(missing_ok=True)
-                    lock.unlink(missing_ok=True)
-                    log.info("Cleaned stale Wayland socket: %s", wl_display)
-                except OSError:
-                    pass
+            wl_names.add(wl_display)
+        if self.wayland_socket_name:
+            wl_names.add(self.wayland_socket_name)
 
+        for wl_name in wl_names:
+            sock = runtime_dir / wl_name
+            lock = runtime_dir / f"{wl_name}.lock"
+            for f in (sock, lock):
+                if f.exists():
+                    try:
+                        f.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            if not sock.exists() and wl_name == wl_display:
+                continue
+            log.info("Cleaned stale Wayland socket: %s", wl_name)
+
+        # Clean X11 socket + lock (can't control display number, use state).
+        # Safety: check the lock file PID — only clean if the process is dead.
         if x_display:
-            # x_display is like ":2", socket is /tmp/.X11-unix/X2
             num = x_display.lstrip(":")
             x11_sock = Path("/tmp/.X11-unix") / f"X{num}"
-            if x11_sock.exists():
+            x_lock = Path(f"/tmp/.X{num}-lock")
+            # Check lock PID before cleaning — never remove a live process's socket
+            if x_lock.exists():
                 try:
-                    x11_sock.unlink(missing_ok=True)
-                    log.info("Cleaned stale X11 socket: %s", x_display)
-                except OSError:
-                    pass
+                    lock_pid = int(x_lock.read_text().strip())
+                    if _pid_alive(lock_pid):
+                        log.debug("X11 lock %s held by live pid %d — skipping", x_display, lock_pid)
+                        return
+                except (ValueError, OSError):
+                    pass  # corrupt/unreadable lock — safe to clean
+            cleaned = False
+            for f in (x11_sock, x_lock):
+                if f.exists():
+                    try:
+                        f.unlink(missing_ok=True)
+                        cleaned = True
+                    except OSError:
+                        pass
+            if cleaned:
+                log.info("Cleaned stale X11 socket/lock: %s", x_display)

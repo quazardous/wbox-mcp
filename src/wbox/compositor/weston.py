@@ -31,10 +31,13 @@ class WestonCompositor(CompositorServer):
 
     def __init__(self, *, screen: str = "1280x800", shell: str = "kiosk",
                  backend: str = "wayland", instance_name: str = "",
-                 timeouts: dict | None = None):
-        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts)
+                 timeouts: dict | None = None, input_backend: str = "x11"):
+        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend)
         self.shell = shell
         self.backend = backend
+        # Deterministic wayland socket name
+        state_id = instance_name or self.compositor_name
+        self.wayland_socket_name = f"wbox-{state_id}"
         self._ini_path: Path | None = None
         self._last_app_cmd: list[str] = []
         self._last_app_env: dict[str, str] = {}
@@ -87,6 +90,7 @@ class WestonCompositor(CompositorServer):
             f"--config={self._ini_path}",
             f"--width={w}",
             f"--height={h}",
+            f"-S", self.wayland_socket_name,
             "--debug",
         ]
 

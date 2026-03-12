@@ -92,6 +92,9 @@ DEPS_MAP=(
     "xev:xorg-x11-utils:x11-utils:xorg-xev"
     "xclip:xclip:xclip:xclip"
     "xsel:xsel:xsel:xsel"
+    "wtype:wtype:wtype:wtype"
+    "ydotool:ydotool:ydotool:ydotool"
+    "wl-copy:wl-clipboard:wl-clipboard:wl-clipboard"
 )
 
 pkg_for() {
@@ -123,7 +126,7 @@ install_pkgs() {
 # ── Runtime dependencies ───────────────────────────────────────────
 
 REQUIRED_BINS=(xdotool)
-OPTIONAL_BINS=(weston cage grim weston-screenshooter xev xclip xsel)
+OPTIONAL_BINS=(weston cage grim weston-screenshooter xev xclip xsel wtype ydotool wl-copy)
 
 MISSING_REQUIRED=()
 MISSING_OPTIONAL=()
@@ -146,7 +149,8 @@ if [ ${#ALL_MISSING[@]} -gt 0 ]; then
         echo "MISSING (optional): ${MISSING_OPTIONAL[*]}"
         echo "  You need at least one compositor (weston or cage)."
         echo "  grim is needed for cage screenshots, weston-screenshooter for weston."
-        echo "  xclip or xsel is needed for clipboard tools."
+        echo "  xclip or xsel is needed for clipboard tools (x11 backend)."
+        echo "  wtype, ydotool, wl-clipboard are needed for wayland input backend."
     fi
     echo ""
 
