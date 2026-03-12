@@ -12,10 +12,11 @@ Usage:
 
 Init options (non-interactive mode):
     --name NAME              Instance name
-    --compositor TYPE        weston, cage, or win32
+    --compositor TYPE        labwc, weston, cage, or win32
     --screen WxH             Screen size (e.g. 1280x800) — Linux only
     --weston-backend TYPE    wayland or x11 — Linux only
     --weston-shell TYPE      kiosk or desktop — Linux only
+    --input-backend BACKEND  hybrid, x11, or wayland — Linux only
     --title-hint TEXT        Window title substring — Windows only
     --app-command CMD        App command to launch
     --app-env KEY=VALUE      Environment variable (repeatable)
@@ -175,6 +176,8 @@ def _parse_init_args(args: list[str]) -> tuple[str | None, dict]:
             flags["weston_shell"] = args[i + 1]; i += 2
         elif a == "--title-hint":
             flags["title_hint"] = args[i + 1]; i += 2
+        elif a == "--input-backend":
+            flags["input_backend"] = args[i + 1]; i += 2
         elif a == "--app-command":
             flags["app_command"] = args[i + 1]; i += 2
         elif a == "--app-env":
@@ -281,6 +284,7 @@ def _init_interactive(cfg: dict, config_path: Path):
         cfg.pop("screen", None)
         cfg.pop("weston_shell", None)
         cfg.pop("weston_backend", None)
+        cfg.pop("input_backend", None)
 
         # title_hint — helps find the right window
         cfg["title_hint"] = _prompt(
@@ -289,15 +293,22 @@ def _init_interactive(cfg: dict, config_path: Path):
         )
     else:
         # Linux: choose compositor
-        cfg["compositor"] = _prompt("Compositor [weston/cage]", cfg.get("compositor", "weston"))
+        cfg["compositor"] = _prompt("Compositor [labwc/weston/cage]", cfg.get("compositor", "labwc"))
         cfg["screen"] = _prompt("Screen size", cfg.get("screen", "1280x800"))
 
         if cfg["compositor"] == "weston":
             cfg["weston_shell"] = _prompt("Weston shell [kiosk/desktop]", cfg.get("weston_shell", "kiosk"))
             cfg["weston_backend"] = _prompt("Weston backend [wayland/x11]", cfg.get("weston_backend", "x11"))
+            # Weston doesn't support wlroots protocols — force x11 input
+            cfg["input_backend"] = "x11"
+            print("  (input_backend forced to x11 — weston does not support wtype/wlroots protocols)")
         else:
             cfg.pop("weston_shell", None)
             cfg.pop("weston_backend", None)
+            default_ib = cfg.get("input_backend", "hybrid")
+            if isinstance(default_ib, dict):
+                default_ib = "hybrid"
+            cfg["input_backend"] = _prompt("Input backend [hybrid/x11/wayland]", default_ib)
 
     # App
     app_cfg = cfg.get("app", {})
@@ -389,6 +400,8 @@ def _init_noninteractive(cfg: dict, flags: dict):
         cfg["weston_shell"] = flags["weston_shell"]
     if "title_hint" in flags:
         cfg["title_hint"] = flags["title_hint"]
+    if "input_backend" in flags:
+        cfg["input_backend"] = flags["input_backend"]
 
     # App
     app_cfg = cfg.get("app", {})

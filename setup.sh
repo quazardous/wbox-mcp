@@ -95,6 +95,7 @@ DEPS_MAP=(
     "wtype:wtype:wtype:wtype"
     "ydotool:ydotool:ydotool:ydotool"
     "wl-copy:wl-clipboard:wl-clipboard:wl-clipboard"
+    "labwc:labwc:labwc:labwc"
 )
 
 pkg_for() {
@@ -125,8 +126,8 @@ install_pkgs() {
 
 # ── Runtime dependencies ───────────────────────────────────────────
 
-REQUIRED_BINS=(xdotool)
-OPTIONAL_BINS=(weston cage grim weston-screenshooter xev xclip xsel wtype ydotool wl-copy)
+REQUIRED_BINS=(labwc grim xdotool wtype)
+OPTIONAL_BINS=(weston cage weston-screenshooter xev xclip xsel ydotool wl-copy)
 
 MISSING_REQUIRED=()
 MISSING_OPTIONAL=()
@@ -147,10 +148,11 @@ if [ ${#ALL_MISSING[@]} -gt 0 ]; then
     fi
     if [ ${#MISSING_OPTIONAL[@]} -gt 0 ]; then
         echo "MISSING (optional): ${MISSING_OPTIONAL[*]}"
-        echo "  You need at least one compositor (weston or cage)."
-        echo "  grim is needed for cage screenshots, weston-screenshooter for weston."
+        echo "  weston/cage are alternative compositors (labwc is the default)."
+        echo "  weston-screenshooter is needed for weston screenshots."
         echo "  xclip or xsel is needed for clipboard tools (x11 backend)."
-        echo "  wtype, ydotool, wl-clipboard are needed for wayland input backend."
+        echo "  wl-clipboard is needed for clipboard tools (wayland/hybrid backend)."
+        echo "  ydotool is needed for wayland mouse input (not recommended — uses /dev/uinput)."
     fi
     echo ""
 

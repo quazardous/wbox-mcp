@@ -23,7 +23,7 @@ class CageCompositor(CompositorServer):
     compositor_name = "cage"
 
     def __init__(self, *, screen: str = "1280x800", instance_name: str = "",
-                 timeouts: dict | None = None, input_backend: str = "x11"):
+                 timeouts: dict | None = None, input_backend: str | dict = "x11"):
         super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend)
         self._log_file: Path | None = None
 

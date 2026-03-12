@@ -1,0 +1,113 @@
+# ┌─────────────────────────────────────────────────────────────────┐
+# │  wbox-mcp — config.yaml reference                              │
+# │  Copy this file, uncomment what you need, and adjust values.   │
+# └─────────────────────────────────────────────────────────────────┘
+
+# Instance name — used for state files, MCP registration, socket naming.
+name: my-wbox
+
+# ── Compositor ─────────────────────────────────────────────────────
+#
+# Which nested Wayland compositor to run.
+#
+#   labwc   — (default) wlroots-based stacking WM. Resizable, movable window.
+#             Supports hybrid/wayland input backends (wlroots protocols).
+#   weston  — Reference compositor. Resizable window (x11 backend).
+#             Only supports x11 input backend (no wlroots protocols).
+#   cage    — Kiosk compositor. Fixed-size fullscreen, no resize/move.
+#             Supports hybrid/wayland input backends (wlroots-based).
+#
+compositor: labwc
+# compositor: weston
+# compositor: cage
+
+# Screen size (WxH) — initial size of the nested compositor window.
+screen: "1280x800"
+
+# ── Weston-specific options (ignored by labwc/cage) ────────────────
+#
+# weston_shell: kiosk or desktop
+#   kiosk   — no panel, no window decorations inside
+#   desktop — full desktop shell with panel
+#
+# weston_backend: wayland or x11
+#   wayland — weston runs as a Wayland client (recommended)
+#   x11     — weston runs as an X11 client
+#
+# weston_shell: kiosk
+# weston_backend: x11
+
+# ── Input backend ──────────────────────────────────────────────────
+#
+# Controls how keyboard, mouse, and clipboard input is injected
+# into the nested compositor.
+#
+# Presets (string):
+#   hybrid  — (default) wtype keyboard + xdotool mouse + wl-clipboard
+#             Best combo: native Wayland keyboard, reliable X11 mouse,
+#             no interference with the user's host desktop.
+#             Requires wlroots compositor (labwc, cage).
+#   x11     — xdotool for everything + xclip/xsel clipboard.
+#             Works with all compositors. Needs Xwayland.
+#   wayland — wtype keyboard + ydotool mouse + wl-clipboard.
+#             WARNING: ydotool uses /dev/uinput and WILL move the
+#             user's real mouse on the host. Not recommended.
+#
+# Custom (dict) — mix and match per function:
+#   keyboard:  xdotool | wtype
+#   mouse:     xdotool | ydotool
+#   clipboard: x11     | wayland
+#   Missing keys are filled from the "x11" preset defaults.
+#
+input_backend: hybrid
+# input_backend: x11
+# input_backend: wayland
+# input_backend:
+#   keyboard: wtype      # wtype (Wayland native) or xdotool (X11)
+#   mouse: xdotool       # xdotool (X11, isolated) or ydotool (uinput, NOT isolated)
+#   clipboard: wayland   # wayland (wl-copy/wl-paste) or x11 (xclip/xsel)
+
+# ── Logging ────────────────────────────────────────────────────────
+log:
+  dir: ./log
+  # level: debug | info | warning | error
+  level: info
+
+# ── Screenshots ────────────────────────────────────────────────────
+screenshot_dir: ./screenshots
+
+# ── Timeouts (seconds) ─────────────────────────────────────────────
+# timeouts:
+#   wayland_display: 10   # wait for compositor's Wayland socket
+#   xwayland_display: 15  # wait for Xwayland display
+#   app_render: 3         # wait after app launch for initial render
+#   stop: 10              # graceful SIGTERM timeout before SIGKILL
+
+# ── Application ────────────────────────────────────────────────────
+app:
+  command: ""             # e.g. "xterm", "soffice --writer", "firefox"
+  env: {}                 # environment variables passed to the app
+  # env:
+  #   SAL_USE_VCLPLUGIN: gtk3
+  #   MY_VAR: value
+
+  # Scripts to run before launching the app (in order).
+  # pre_launch:
+  # - python3 scripts/setup.py
+  # - ./scripts/prepare.sh
+
+# ── Script timeout ─────────────────────────────────────────────────
+# Global timeout for custom script tools (seconds). Default: 120.
+# Can be overridden per-tool with "timeout:" in the tool definition.
+# tool_timeout: 120
+
+# ── Custom tools ───────────────────────────────────────────────────
+#
+# Each key becomes an MCP tool. The script runs with DISPLAY and
+# WAYLAND_DISPLAY set to the compositor's internal displays.
+#
+# tools:
+#   my_tool:
+#     script: ./scripts/my_tool.sh
+#     description: What this tool does
+#     timeout: 30                      # optional per-tool timeout (seconds)

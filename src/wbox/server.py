@@ -35,12 +35,12 @@ log = logging.getLogger(__name__)
 def build_compositor(cfg: dict) -> CompositorServer:
     """Build a compositor backend from config."""
     # Auto-detect backend on Windows if not specified
-    default_backend = "win32" if sys.platform == "win32" else "cage"
+    default_backend = "win32" if sys.platform == "win32" else "labwc"
     backend = cfg.get("compositor", default_backend)
     screen = cfg.get("screen", "1280x800")
     instance_name = cfg.get("name", "")
     timeouts = cfg.get("timeouts", {})
-    input_backend = cfg.get("input_backend", "x11")
+    input_backend = cfg.get("input_backend", "hybrid")
 
     if backend == "win32":
         from .compositor.win32 import Win32Compositor
@@ -60,6 +60,15 @@ def build_compositor(cfg: dict) -> CompositorServer:
             timeouts=timeouts,
             input_backend=input_backend,
         )
+    elif backend == "labwc":
+        from .compositor.labwc import LabwcCompositor
+        comp = LabwcCompositor(
+            screen=screen,
+            instance_name=instance_name,
+            timeouts=timeouts,
+            input_backend=input_backend,
+        )
+        return comp
     else:
         from .compositor.cage import CageCompositor
         return CageCompositor(
@@ -233,10 +242,11 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
     cfg["_screenshot_dir"] = resolve_dir(cfg, "screenshot_dir", "./screenshots")
     compositor.state.screenshot_dir = cfg["_screenshot_dir"]
 
-    # Set cage log dir for stderr capture
+    # Set compositor log dir for stderr capture (Linux only)
     if sys.platform != "win32":
         from .compositor.cage import CageCompositor
-        if isinstance(compositor, CageCompositor):
+        from .compositor.labwc import LabwcCompositor
+        if isinstance(compositor, (CageCompositor, LabwcCompositor)):
             compositor.set_log_dir(cfg["_log_dir"])
 
     # Setup file logging

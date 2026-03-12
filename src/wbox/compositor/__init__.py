@@ -12,5 +12,6 @@ if sys.platform == "win32":
     __all__.append("Win32Compositor")
 else:
     from .cage import CageCompositor
+    from .labwc import LabwcCompositor
     from .weston import WestonCompositor
-    __all__.extend(["CageCompositor", "WestonCompositor"])
+    __all__.extend(["CageCompositor", "LabwcCompositor", "WestonCompositor"])

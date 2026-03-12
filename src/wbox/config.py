@@ -14,14 +14,60 @@ import sys
 
 _IS_WIN32 = sys.platform == "win32"
 
+INPUT_BACKEND_PRESETS = {
+    "x11": {"keyboard": "xdotool", "mouse": "xdotool", "clipboard": "x11"},
+    "wayland": {"keyboard": "wtype", "mouse": "ydotool", "clipboard": "wayland"},
+    "hybrid": {"keyboard": "wtype", "mouse": "xdotool", "clipboard": "wayland"},
+}
+
+_VALID_BACKENDS = {
+    "keyboard": ("xdotool", "wtype"),
+    "mouse": ("xdotool", "ydotool"),
+    "clipboard": ("x11", "wayland"),
+}
+
+
+def resolve_input_backend(value: str | dict) -> dict:
+    """Resolve input_backend config (string preset or per-function dict) to a full dict.
+
+    Returns dict with keys: keyboard, mouse, clipboard.
+    """
+    if isinstance(value, str):
+        if value not in INPUT_BACKEND_PRESETS:
+            raise ValueError(
+                f"unknown input_backend preset {value!r}, "
+                f"expected one of {list(INPUT_BACKEND_PRESETS)} or a dict"
+            )
+        return dict(INPUT_BACKEND_PRESETS[value])
+
+    if isinstance(value, dict):
+        # Fill missing keys from x11 defaults
+        resolved = dict(INPUT_BACKEND_PRESETS["x11"])
+        for k, v in value.items():
+            if k not in _VALID_BACKENDS:
+                raise ValueError(
+                    f"unknown input_backend key {k!r}, "
+                    f"expected one of {list(_VALID_BACKENDS)}"
+                )
+            if v not in _VALID_BACKENDS[k]:
+                raise ValueError(
+                    f"invalid input_backend.{k} value {v!r}, "
+                    f"expected one of {_VALID_BACKENDS[k]}"
+                )
+            resolved[k] = v
+        return resolved
+
+    raise ValueError(f"input_backend must be a string or dict, got {type(value).__name__}")
+
+
 DEFAULT_CONFIG = {
     "name": "my-wbox",
-    "compositor": "win32" if _IS_WIN32 else "weston",
+    "compositor": "win32" if _IS_WIN32 else "labwc",
     "screen": "1280x800",
     **({} if _IS_WIN32 else {
         "weston_shell": "kiosk",
         "weston_backend": "x11",
-        "input_backend": "x11",  # "x11" (xdotool) or "wayland" (wtype/ydotool)
+        "input_backend": "hybrid",  # preset: "x11", "wayland", "hybrid", or dict
     }),
     "log": {
         "dir": "./log",

@@ -23,6 +23,10 @@
 - **Deterministic Wayland socket naming** (Weston): socket is now `wbox-<instance>` instead of auto-assigned `wayland-N`, eliminating collisions between concurrent instances
 - **Script tool timeout**: custom script tools now respect a configurable timeout (`timeout` per tool, or global `tool_timeout`) — kills runaway scripts instead of hanging forever
 - **Zombie process detection**: `_pid_alive()` now checks `/proc/<pid>/status` to detect zombie processes that fool `kill -0`
+- **labwc compositor backend**: wlroots-based stacking WM — resizable/movable window on the host, supports `hybrid` input backend. New default compositor on Linux.
+- **Granular input backend config**: `input_backend` can now be a string preset (`hybrid`, `x11`, `wayland`) or a per-function dict (`keyboard`, `mouse`, `clipboard`). The `hybrid` preset (wtype keyboard + xdotool mouse + wl-clipboard) is the new default — zero interference with the user's desktop.
+- **`--input-backend` CLI flag**: non-interactive init now supports `--input-backend hybrid|x11|wayland`
+- **`examples/config.sample.yaml`**: full config reference with all options documented
 
 ### Changed
 
@@ -35,7 +39,10 @@
 - **README rewritten**: dual Linux/Windows documentation, init flags table, platform-specific config examples
 - **Graceful stop with escalation**: `stop()` sends SIGTERM, waits up to `timeouts.stop` (default 10s), then escalates to SIGKILL — returns `"force_killed"` status when needed
 - **Robust socket cleanup**: X11 lock file PID is checked before removing sockets; deterministic Wayland sockets are also cleaned; sockets are cleaned on both `stop()` and `kill()`
-- setup.sh now lists `wtype`, `ydotool`, and `wl-clipboard` as optional dependencies
+- **Default compositor changed to labwc** (from weston) — resizable, wlroots protocols, hybrid input
+- **Default input backend changed to hybrid** (from x11) — wtype keyboard + xdotool mouse, no host interference
+- **setup.sh**: `labwc`, `grim`, `xdotool`, `wtype` are now required deps; `weston`, `cage`, `ydotool` are optional
+- **Wizard**: prompts for input backend on Linux; auto-forces `x11` for weston (no wlroots protocol support)
 
 ## [0.3.0] - 2026-03-11
 

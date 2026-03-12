@@ -104,11 +104,12 @@ class CompositorServer:
     wayland_socket_name: str = ""
 
     def __init__(self, *, screen: str = "1280x800", instance_name: str = "",
-                 timeouts: dict | None = None, input_backend: str = "x11"):
+                 timeouts: dict | None = None, input_backend: str | dict = "x11"):
+        from wbox.config import resolve_input_backend
         self.screen = screen
         self.instance_name = instance_name
         self.timeouts = timeouts or {}
-        self.input_backend = input_backend  # "x11" (xdotool) or "wayland" (wtype/ydotool)
+        self.input_backends = resolve_input_backend(input_backend)
         # Use instance name for state file if available, else compositor name
         state_id = instance_name or self.compositor_name
         self._state_file = Path(tempfile.gettempdir()) / f"wbox_{state_id}_state.json"
@@ -395,7 +396,7 @@ class CompositorServer:
     def click(self, x: int, y: int, button: int = 1) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
-        if self.input_backend == "wayland":
+        if self.input_backends["mouse"] == "ydotool":
             return self._wl_click(x, y, button)
         self._xdotool("mousemove", str(x), str(y))
         time.sleep(0.05)
@@ -404,7 +405,7 @@ class CompositorServer:
     def type_text(self, text: str, delay_ms: int = 12) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
-        if self.input_backend == "wayland":
+        if self.input_backends["keyboard"] == "wtype":
             return self._wl_type(text, delay_ms)
         self._focus_active_window()
         return self._xdotool("type", "--delay", str(delay_ms), "--", text)
@@ -412,7 +413,7 @@ class CompositorServer:
     def key(self, shortcut: str) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
-        if self.input_backend == "wayland":
+        if self.input_backends["keyboard"] == "wtype":
             return self._wl_key(shortcut)
         self._focus_active_window()
         return self._xdotool("key", "--", shortcut)
@@ -420,7 +421,7 @@ class CompositorServer:
     def mouse_move(self, x: int, y: int) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
-        if self.input_backend == "wayland":
+        if self.input_backends["mouse"] == "ydotool":
             return self._wl_mouse_move(x, y)
         return self._xdotool("mousemove", str(x), str(y))
 
@@ -429,7 +430,7 @@ class CompositorServer:
     def _clipboard_env(self) -> dict | None:
         """Build env dict for clipboard operations, or None if not available."""
         env = os.environ.copy()
-        if self.input_backend == "wayland":
+        if self.input_backends["clipboard"] == "wayland":
             if not self.state.wayland_display:
                 self.reload_state()
             if not self.state.wayland_display:
@@ -452,7 +453,7 @@ class CompositorServer:
             return {"error": "no display available"}
 
         import shutil
-        if self.input_backend == "wayland":
+        if self.input_backends["clipboard"] == "wayland":
             if shutil.which("wl-paste"):
                 cmd = ["wl-paste", "--no-newline"]
             else:
@@ -479,7 +480,7 @@ class CompositorServer:
             return {"error": "no display available"}
 
         import shutil
-        if self.input_backend == "wayland":
+        if self.input_backends["clipboard"] == "wayland":
             if shutil.which("wl-copy"):
                 cmd = ["wl-copy", "--"]
                 result = subprocess.run(cmd + [text], env=env, capture_output=True, text=True, timeout=5)

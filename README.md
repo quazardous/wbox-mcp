@@ -2,7 +2,7 @@
 
 MCP server for GUI automation with Claude — run any desktop app and control it via screenshots, keyboard, mouse.
 
-**Linux**: sandboxed nested Wayland/X11 compositor (weston, cage).
+**Linux**: sandboxed nested Wayland compositor (labwc, weston, cage) with hybrid input — no interference with the user's desktop.
 **Windows**: direct Win32 API backend (PrintWindow + PostMessage) — works in the background while you use your PC.
 
 ## Install
@@ -13,7 +13,7 @@ MCP server for GUI automation with Claude — run any desktop app and control it
 curl -sSL https://raw.githubusercontent.com/quazardous/wbox-mcp/main/setup.sh | bash
 ```
 
-Clones to `~/.local/share/wbox-mcp`, installs Python package, symlinks `wboxr` + `wbox-mcp` to `~/.local/bin`, and installs system dependencies (xdotool, weston, grim...) via your package manager.
+Clones to `~/.local/share/wbox-mcp`, installs Python package, symlinks `wboxr` + `wbox-mcp` to `~/.local/bin`, and installs system dependencies (labwc, grim, xdotool, wtype...) via your package manager.
 
 ```bash
 # Custom install dir
@@ -97,7 +97,7 @@ No project root detected — config goes in the current directory.
 
 The interactive wizard adapts to your platform:
 
-**Linux** — asks for compositor (weston/cage), screen size, weston options, pre-launch scripts.
+**Linux** — asks for compositor (labwc/weston/cage), screen size, input backend, pre-launch scripts.
 
 **Windows** — auto-detects `win32` backend, asks for window title hint, optional timeouts. No compositor/screen config needed.
 
@@ -106,9 +106,9 @@ The interactive wizard adapts to your platform:
 ```bash
 # Linux
 wboxr init --name my-app \
-  --compositor weston \
+  --compositor labwc \
   --app-command "soffice --writer" \
-  --app-env "GDK_BACKEND=x11" \
+  --app-env "SAL_USE_VCLPLUGIN=gtk3" \
   --register
 
 # Windows
@@ -157,20 +157,24 @@ Generated entry (absolute paths, no cwd needed):
 
 ### Linux
 
-System dependencies are installed automatically by `setup.sh`. To install manually:
+System dependencies are installed automatically by `setup.sh`.
+
+**Required:** `labwc`, `grim`, `xdotool`, `wtype`, `python3`, `uv`, `git`
+
+**Optional:** `weston`, `cage`, `weston-screenshooter`, `xclip`/`xsel`, `wl-clipboard`, `ydotool`
+
+Manual install:
 
 ```bash
 # Fedora
-sudo dnf install xdotool weston cage grim xorg-x11-utils
+sudo dnf install labwc grim xdotool wtype wl-clipboard
 
 # Ubuntu/Debian
-sudo apt install xdotool weston cage grim x11-utils
+sudo apt install labwc grim xdotool wtype wl-clipboard
 
 # Arch
-sudo pacman -S xdotool weston cage grim xorg-xev
+sudo pacman -S labwc grim xdotool wtype wl-clipboard
 ```
-
-Also needed: `python3`, `uv`, `git`.
 
 ### Windows
 
@@ -179,6 +183,41 @@ No system dependencies — the Win32 backend uses `ctypes` to call Windows APIs 
 Needed: `python`, `uv`, `git` (auto-installed by `setup.ps1`).
 
 **Windows 10+** required.
+
+## Compositors (Linux)
+
+| Compositor | Type | Resizable | Movable | wlroots protocols | Best input backend |
+|------------|------|-----------|---------|-------------------|--------------------|
+| **labwc** (default) | Stacking WM | Yes | Yes | Yes | `hybrid` |
+| **weston** | Reference | Yes | Yes | No | `x11` |
+| **cage** | Kiosk | No | No | Yes | `hybrid` |
+
+- **labwc** — recommended. Lightweight wlroots-based stacking WM (Openbox-style). Resizable/movable window on the host, supports `hybrid` input (wtype + xdotool). No interference with the user.
+- **weston** — Wayland reference compositor. Resizable but does NOT support wlroots protocols (wtype, virtual-pointer), so only the `x11` input backend works.
+- **cage** — Kiosk compositor. Fixed-size fullscreen, no resize/move. wlroots-based, so `hybrid` works.
+
+## Input backends (Linux)
+
+Controls how keyboard, mouse, and clipboard input is injected into the nested compositor.
+
+| Preset | Keyboard | Mouse | Clipboard | Interferes with host? | Compositors |
+|--------|----------|-------|-----------|-----------------------|-------------|
+| **`hybrid`** (default) | wtype | xdotool | wl-clipboard | No | labwc, cage |
+| `x11` | xdotool | xdotool | xclip/xsel | No | all |
+| `wayland` | wtype | ydotool | wl-clipboard | **Yes** (mouse) | labwc, cage |
+
+**`hybrid`** is the recommended default: wtype for keyboard (native Wayland, isolated in the nested compositor), xdotool for mouse (via Xwayland inside the nested compositor, also isolated), wl-clipboard for clipboard. Zero interference with the user's desktop.
+
+**`wayland`** is NOT recommended: ydotool uses `/dev/uinput` which injects events at the kernel level, moving the user's real mouse.
+
+You can also set per-function backends with a dict:
+
+```yaml
+input_backend:
+  keyboard: wtype      # wtype or xdotool
+  mouse: xdotool       # xdotool or ydotool
+  clipboard: wayland   # wayland or x11
+```
 
 ## CLI
 
@@ -203,10 +242,11 @@ wboxr --version                   # Show version
 | Flag | Description |
 |------|-------------|
 | `--name NAME` | Instance name |
-| `--compositor TYPE` | `weston`, `cage`, or `win32` (auto-detected on Windows) |
+| `--compositor TYPE` | `labwc`, `weston`, `cage`, or `win32` (auto-detected on Windows) |
 | `--screen WxH` | Screen size, e.g. `1280x800` (Linux only) |
 | `--weston-backend TYPE` | `wayland` or `x11` (Linux only) |
 | `--weston-shell TYPE` | `kiosk` or `desktop` (Linux only) |
+| `--input-backend PRESET` | `hybrid`, `x11`, or `wayland` (Linux only) |
 | `--title-hint TEXT` | Window title substring to match (Windows only) |
 | `--app-command CMD` | App command to launch |
 | `--app-env KEY=VALUE` | Environment variable (repeatable) |
@@ -232,7 +272,7 @@ wbox-mcp --version                # Show version
 | Tool | Description |
 |------|-------------|
 | `launch` | Start compositor/app |
-| `stop` | Graceful shutdown |
+| `stop` | Graceful shutdown (SIGTERM → SIGKILL on Linux) |
 | `kill` | Force kill + cleanup |
 | `screenshot` | Capture display (returns image, includes modal dialogs) |
 | `click` | Click at (x, y) |
@@ -241,7 +281,7 @@ wbox-mcp --version                # Show version
 | `keys` | Send multiple keys in sequence |
 | `mouse_move` | Move mouse |
 | `get_size` | Get display dimensions |
-| `resize` | Resize display |
+| `resize` | Resize display (labwc/weston only) |
 | `clipboard_read` | Read text from clipboard |
 | `clipboard_write` | Write text to clipboard |
 | `tail_log` | Show MCP server logs |
@@ -263,16 +303,17 @@ A script template is created automatically (`.sh` on Linux, `.ps1` on Windows). 
 - `WBOX_X_DISPLAY` — compositor's Xwayland display
 - Plus any app env you configured
 
+Script tools support configurable timeouts (per-tool `timeout:` or global `tool_timeout:`).
+
 ## config.yaml
 
 ### Linux (Wayland compositor)
 
 ```yaml
 name: my-app
-compositor: weston
+compositor: labwc          # labwc (default), weston, or cage
 screen: "1280x800"
-weston_shell: kiosk
-weston_backend: x11
+input_backend: hybrid      # hybrid (default), x11, wayland, or dict
 
 log:
   dir: ./log
@@ -283,7 +324,7 @@ screenshot_dir: ./screenshots
 app:
   command: "my-app --flag"
   env:
-    GDK_BACKEND: x11
+    SAL_USE_VCLPLUGIN: gtk3
   pre_launch:
     - "./scripts/setup_profile.sh"
 
@@ -291,6 +332,7 @@ tools:
   deploy:
     script: "./scripts/deploy.sh"
     description: "Build and deploy"
+    timeout: 60              # optional per-tool timeout (seconds)
 ```
 
 ### Windows (Win32 backend)
@@ -329,11 +371,13 @@ tools: {}
 
 All paths are relative to the config directory. Each instance is self-contained: config, logs, and screenshots live together.
 
+See [`examples/config.sample.yaml`](examples/config.sample.yaml) for a full reference with all Linux options documented.
+
 ## How it works
 
 ### Linux
 
-The app runs inside a **nested Wayland compositor** (weston or cage). Input is injected via `xdotool` through Xwayland, screenshots via `grim` or `weston-screenshooter`. The compositor provides full isolation — the app cannot interfere with your desktop.
+The app runs inside a **nested Wayland compositor** (labwc, weston, or cage). Keyboard input is injected via `wtype` (native Wayland protocol), mouse via `xdotool` through Xwayland, screenshots via `grim`. The compositor provides full isolation — the app cannot interfere with your desktop.
 
 ### Windows
 
