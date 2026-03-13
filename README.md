@@ -184,47 +184,23 @@ Needed: `python`, `uv`, `git` (auto-installed by `setup.ps1`).
 
 **Windows 10+** required.
 
-## Compositors (Linux)
+## Platform features
 
-| Compositor | Type | Resizable | Movable | wlroots protocols | Best input backend |
-|------------|------|-----------|---------|-------------------|--------------------|
-| **labwc** (default) | Stacking WM | Yes | Yes | Yes | **`hybrid`** |
-| weston | Reference | Yes | Yes | No | `x11` |
-| cage | Kiosk | No | No | Yes | `hybrid` |
+| Feature | Linux | Windows |
+|---------|-------|---------|
+| Screenshot | grim (pixel-perfect) | PrintWindow (background) |
+| Keyboard | wtype (Wayland protocol) | PostMessage / SendInput |
+| Mouse | wbox-pointer (virtual pointer) | PostMessage / SendInput |
+| Clipboard | xclip + bridge to host | Win32 clipboard API |
+| Window management | wlrctl (list/focus) | EnumChildWindows |
+| Resize display | wlr-randr | N/A |
+| App isolation | Full (nested compositor) | None (normal process) |
+| Background operation | Yes (isolated display) | Yes (PostMessage) |
+| Interferes with host | No | Key combos briefly steal focus |
 
-**labwc + hybrid is the recommended setup.** labwc is a lightweight wlroots-based stacking WM (Openbox-inspired). The nested compositor window is resizable and movable on your host desktop. Combined with the `hybrid` input backend, it provides pixel-perfect mouse input (via wbox-pointer, a built-in Wayland virtual pointer), native keyboard input (wtype), and reliable clipboard (xclip via Xwayland). Zero interference with the user's desktop.
+**Linux**: labwc + hybrid input is the recommended setup. See [docs/backends.md](docs/backends.md) for compositor comparison, input backend details, and compatibility matrix.
 
-Other compositors:
-- **weston** — Wayland reference compositor. Resizable but does NOT support wlroots protocols (wtype, virtual-pointer), so only the `x11` input backend works.
-- **cage** — Kiosk compositor. Fixed-size fullscreen, no resize/move. wlroots-based, so `hybrid` works but you can't resize.
-
-## Input backends (Linux)
-
-Controls how keyboard, mouse, and clipboard input is injected into the nested compositor.
-
-| Preset | Keyboard | Mouse | Clipboard | Interferes with host? | Compositors |
-|--------|----------|-------|-----------|-----------------------|-------------|
-| **`hybrid`** (default) | wtype | **wbox-pointer** | xclip (x11) | No | labwc, cage |
-| `x11` | xdotool | xdotool | xclip/xsel | No | all |
-| `wayland` | wtype | ydotool | wl-clipboard | **Yes** (mouse) | labwc, cage |
-
-**`hybrid`** is the recommended default:
-- **Keyboard**: wtype — native Wayland protocol, isolated in the nested compositor
-- **Mouse**: wbox-pointer — built-in pure Python tool using the `zwlr_virtual_pointer_manager_v1` Wayland protocol for pixel-perfect absolute positioning
-- **Clipboard**: xclip via Xwayland — reliable and isolated
-
-Zero interference with the user's desktop. No kernel-level input injection.
-
-**`wayland`** is NOT recommended: ydotool uses `/dev/uinput` which injects events at the kernel level, moving the user's real mouse.
-
-You can also set per-function backends with a dict:
-
-```yaml
-input_backend:
-  keyboard: wtype        # wtype or xdotool
-  mouse: wbox-pointer    # wbox-pointer, xdotool, or ydotool
-  clipboard: x11         # x11 or wayland
-```
+**Windows**: Win32 backend, no compositor needed. See [docs/backends.md](docs/backends.md) for Win32 API details.
 
 ## CLI
 
@@ -374,36 +350,15 @@ app:
 tools: {}
 ```
 
-**Windows-specific config:**
-
-| Key | Description |
-|-----|-------------|
-| `compositor: win32` | Auto-detected on Windows, explicit on cross-platform configs |
-| `title_hint` | Substring to match in window title (helps find the right window when the app spawns multiple processes) |
-| `timeouts.window_discovery` | How long to wait for the app window to appear (default: 10s) |
-| `timeouts.edit_control` | How long to wait for the text input control (default: 3s) |
-
 All paths are relative to the config directory. Each instance is self-contained: config, logs, and screenshots live together.
 
-See [`examples/config.sample.yaml`](examples/config.sample.yaml) for a full reference with all Linux options documented.
+See [`examples/config.sample.yaml`](examples/config.sample.yaml) for a full reference and [docs/backends.md](docs/backends.md) for backend-specific config options.
 
 ## How it works
 
-### Linux
+**Linux** — the app runs inside a **nested Wayland compositor** (labwc). Full isolation: the app cannot see or interfere with your desktop. A clipboard bridge syncs copy-paste between the nested compositor and the host automatically.
 
-The app runs inside a **nested Wayland compositor** (labwc by default). Keyboard input is injected via `wtype` (native Wayland protocol), mouse via `wbox-pointer` (built-in virtual pointer using `zwlr_virtual_pointer_manager_v1`), screenshots via `grim`, display resize via `wlr-randr`. Window management (list/focus) uses `wlrctl`. The compositor provides full isolation — the app cannot interfere with your desktop. A **clipboard bridge** automatically syncs copy-paste between the nested compositor and the host (bidirectional, via `wl-clipboard`).
-
-### Windows
-
-The app runs as a **normal Windows process**. The backend uses Win32 APIs:
-
-- **Screenshots**: `PrintWindow` — captures the window even when it's behind other windows
-- **Text input**: `PostMessage WM_CHAR` — types without stealing focus
-- **Clicks**: `PostMessage WM_LBUTTONDOWN/UP` — clicks without stealing focus
-- **Key combos**: `SendInput` — for shortcuts like `ctrl+s` (briefly brings window to foreground)
-- **Modal dialogs**: automatically detected and composited into screenshots
-
-You can keep working in VS Code while Claude controls the app in the background. The only moment focus is briefly stolen is for key combos with modifiers (ctrl, alt, shift).
+**Windows** — the app runs as a normal process. Win32 APIs (PrintWindow, PostMessage) let Claude control it in the background while you keep working. Only key combos with modifiers briefly steal focus.
 
 ## License
 
