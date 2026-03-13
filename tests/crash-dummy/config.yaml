@@ -1,0 +1,38 @@
+name: crash-dummy
+compositor: labwc
+screen: 800x600
+input_backend: hybrid
+log:
+  dir: ./log
+  level: debug
+screenshot_dir: ./screenshots
+app:
+  command: python3 crash_dummy.py
+  env:
+    CRASH_DUMMY_LOG: ./log/crash_dummy.log
+    CRASH_DUMMY_FIFO: ./log/crash_dummy.fifo
+    CRASH_DUMMY_MODE: normal
+tools:
+  send_cmd:
+    script: ./scripts/debug_input.sh
+    description: Send a command to crash dummy via FIFO (dump, ping, open_popup, close_popup, set_text <text>)
+    headless: true
+    schema:
+      type: object
+      properties:
+        command:
+          type: string
+          description: "Command to send: dump, ping, open_popup, close_popup, set_text <text>"
+      required:
+        - command
+  tail_log:
+    script: ./scripts/tail_log.sh
+    description: Show the last N lines of the crash dummy event log
+    headless: true
+    schema:
+      type: object
+      properties:
+        lines:
+          type: integer
+          default: 50
+          description: Number of lines to show (default 50)

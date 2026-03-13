@@ -2,7 +2,7 @@
 
 MCP server for GUI automation with Claude — run any desktop app and control it via screenshots, keyboard, mouse.
 
-**Linux**: sandboxed nested Wayland compositor (labwc, weston, cage) with hybrid input — no interference with the user's desktop.
+**Linux**: sandboxed nested Wayland compositor (**labwc** + **hybrid** input) — pixel-perfect automation with zero interference with the user's desktop.
 **Windows**: direct Win32 API backend (PrintWindow + PostMessage) — works in the background while you use your PC.
 
 ## Install
@@ -159,7 +159,7 @@ Generated entry (absolute paths, no cwd needed):
 
 System dependencies are installed automatically by `setup.sh`.
 
-**Required:** `labwc`, `grim`, `xdotool`, `wtype`, `python3`, `uv`, `git`
+**Required:** `labwc`, `grim`, `xdotool`, `wtype`, `wlr-randr`, `wlrctl`, `python3`, `uv`, `git`
 
 **Optional:** `weston`, `cage`, `weston-screenshooter`, `xclip`/`xsel`, `wl-clipboard`, `ydotool`
 
@@ -167,13 +167,13 @@ Manual install:
 
 ```bash
 # Fedora
-sudo dnf install labwc grim xdotool wtype wl-clipboard
+sudo dnf install labwc grim xdotool wtype wlr-randr wlrctl wl-clipboard xclip
 
 # Ubuntu/Debian
-sudo apt install labwc grim xdotool wtype wl-clipboard
+sudo apt install labwc grim xdotool wtype wlr-randr wlrctl wl-clipboard xclip
 
 # Arch
-sudo pacman -S labwc grim xdotool wtype wl-clipboard
+sudo pacman -S labwc grim xdotool wtype wlr-randr wlrctl wl-clipboard xclip
 ```
 
 ### Windows
@@ -188,13 +188,15 @@ Needed: `python`, `uv`, `git` (auto-installed by `setup.ps1`).
 
 | Compositor | Type | Resizable | Movable | wlroots protocols | Best input backend |
 |------------|------|-----------|---------|-------------------|--------------------|
-| **labwc** (default) | Stacking WM | Yes | Yes | Yes | `hybrid` |
-| **weston** | Reference | Yes | Yes | No | `x11` |
-| **cage** | Kiosk | No | No | Yes | `hybrid` |
+| **labwc** (default) | Stacking WM | Yes | Yes | Yes | **`hybrid`** |
+| weston | Reference | Yes | Yes | No | `x11` |
+| cage | Kiosk | No | No | Yes | `hybrid` |
 
-- **labwc** — recommended. Lightweight wlroots-based stacking WM (Openbox-style). Resizable/movable window on the host, supports `hybrid` input (wtype + xdotool). No interference with the user.
+**labwc + hybrid is the recommended setup.** labwc is a lightweight wlroots-based stacking WM (Openbox-inspired). The nested compositor window is resizable and movable on your host desktop. Combined with the `hybrid` input backend, it provides pixel-perfect mouse input (via wbox-pointer, a built-in Wayland virtual pointer), native keyboard input (wtype), and reliable clipboard (xclip via Xwayland). Zero interference with the user's desktop.
+
+Other compositors:
 - **weston** — Wayland reference compositor. Resizable but does NOT support wlroots protocols (wtype, virtual-pointer), so only the `x11` input backend works.
-- **cage** — Kiosk compositor. Fixed-size fullscreen, no resize/move. wlroots-based, so `hybrid` works.
+- **cage** — Kiosk compositor. Fixed-size fullscreen, no resize/move. wlroots-based, so `hybrid` works but you can't resize.
 
 ## Input backends (Linux)
 
@@ -202,11 +204,16 @@ Controls how keyboard, mouse, and clipboard input is injected into the nested co
 
 | Preset | Keyboard | Mouse | Clipboard | Interferes with host? | Compositors |
 |--------|----------|-------|-----------|-----------------------|-------------|
-| **`hybrid`** (default) | wtype | xdotool | wl-clipboard | No | labwc, cage |
+| **`hybrid`** (default) | wtype | **wbox-pointer** | xclip (x11) | No | labwc, cage |
 | `x11` | xdotool | xdotool | xclip/xsel | No | all |
 | `wayland` | wtype | ydotool | wl-clipboard | **Yes** (mouse) | labwc, cage |
 
-**`hybrid`** is the recommended default: wtype for keyboard (native Wayland, isolated in the nested compositor), xdotool for mouse (via Xwayland inside the nested compositor, also isolated), wl-clipboard for clipboard. Zero interference with the user's desktop.
+**`hybrid`** is the recommended default:
+- **Keyboard**: wtype — native Wayland protocol, isolated in the nested compositor
+- **Mouse**: wbox-pointer — built-in pure Python tool using the `zwlr_virtual_pointer_manager_v1` Wayland protocol for pixel-perfect absolute positioning
+- **Clipboard**: xclip via Xwayland — reliable and isolated
+
+Zero interference with the user's desktop. No kernel-level input injection.
 
 **`wayland`** is NOT recommended: ydotool uses `/dev/uinput` which injects events at the kernel level, moving the user's real mouse.
 
@@ -214,9 +221,9 @@ You can also set per-function backends with a dict:
 
 ```yaml
 input_backend:
-  keyboard: wtype      # wtype or xdotool
-  mouse: xdotool       # xdotool or ydotool
-  clipboard: wayland   # wayland or x11
+  keyboard: wtype        # wtype or xdotool
+  mouse: wbox-pointer    # wbox-pointer, xdotool, or ydotool
+  clipboard: x11         # x11 or wayland
 ```
 
 ## CLI
@@ -282,8 +289,11 @@ wbox-mcp --version                # Show version
 | `mouse_move` | Move mouse |
 | `get_size` | Get display dimensions |
 | `resize` | Resize display (labwc/weston only) |
+| `list_windows` | List all windows/toplevels in the compositor |
+| `focus_window` | Focus/raise a window by title or app_id |
 | `clipboard_read` | Read text from clipboard |
 | `clipboard_write` | Write text to clipboard |
+| `get_mouse_position` | Get current cursor coordinates |
 | `tail_log` | Show MCP server logs |
 | `clean` | Delete logs and screenshots |
 | `debug_input` | Test keyboard input delivery |
@@ -321,12 +331,16 @@ log:
 
 screenshot_dir: ./screenshots
 
+keyboard_layout: ""           # XKB layout (e.g. fr, us, de). Empty = inherit from host
+
 app:
   command: "my-app --flag"
   env:
     SAL_USE_VCLPLUGIN: gtk3
   pre_launch:
     - "./scripts/setup_profile.sh"
+  post_launch_keys: ["super+a"]     # keys sent after app renders (e.g. maximize)
+  post_launch_keys_delay: 0.5       # delay in seconds before/between keys
 
 tools:
   deploy:
@@ -377,7 +391,7 @@ See [`examples/config.sample.yaml`](examples/config.sample.yaml) for a full refe
 
 ### Linux
 
-The app runs inside a **nested Wayland compositor** (labwc, weston, or cage). Keyboard input is injected via `wtype` (native Wayland protocol), mouse via `xdotool` through Xwayland, screenshots via `grim`. The compositor provides full isolation — the app cannot interfere with your desktop.
+The app runs inside a **nested Wayland compositor** (labwc by default). Keyboard input is injected via `wtype` (native Wayland protocol), mouse via `wbox-pointer` (built-in virtual pointer using `zwlr_virtual_pointer_manager_v1`), screenshots via `grim`, display resize via `wlr-randr`. Window management (list/focus) uses `wlrctl`. The compositor provides full isolation — the app cannot interfere with your desktop. A **clipboard bridge** automatically syncs copy-paste between the nested compositor and the host (bidirectional, via `wl-clipboard`).
 
 ### Windows
 

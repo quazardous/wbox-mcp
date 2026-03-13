@@ -7,6 +7,23 @@
   Format: https://semver.org
 -->
 
+## [0.5.0] - 2026-03-13
+
+### Added
+
+- **Clipboard bridge** (labwc): bidirectional clipboard sync between the nested compositor and the host via `wl-paste --watch` + `wl-copy`. Copy-paste now works seamlessly in both directions. Loop-proof via shared hash guard file.
+- **`list_windows` tool**: list all windows/toplevels in the compositor via `wlrctl toplevel list` — useful for finding modal dialogs that may be hidden behind the main window.
+- **`focus_window` tool**: focus/raise a window by title or app_id via `wlrctl toplevel focus` — brings hidden modals to front.
+- **`post_launch_keys` config**: list of keyboard shortcuts sent after app renders (e.g. `["super+a"]` to maximize via labwc keybind). Configurable delay between keys.
+- **`keyboard_layout` config** (labwc): set XKB keyboard layout for the nested compositor (e.g. `fr` for AZERTY). Empty inherits from host.
+- **wtype modifier translation**: `super` → `logo` mapping for wtype compatibility (wtype uses "logo" not "super" for the Super key).
+- **`wlrctl` as required dependency**: added to setup.sh and documentation.
+
+### Changed
+
+- **labwc rc.xml simplified**: removed windowRules (unreliable for actions at map time). Window management now done via `post_launch_keys` and `wlrctl`.
+- **`wlr-randr` added to required deps** (was missing from setup.sh in 0.4.0).
+
 ## [0.4.0] - 2026-03-12
 
 ### Added

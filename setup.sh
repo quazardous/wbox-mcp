@@ -96,6 +96,8 @@ DEPS_MAP=(
     "ydotool:ydotool:ydotool:ydotool"
     "wl-copy:wl-clipboard:wl-clipboard:wl-clipboard"
     "labwc:labwc:labwc:labwc"
+    "wlr-randr:wlr-randr:wlr-randr:wlr-randr"
+    "wlrctl:wlrctl:wlrctl:wlrctl"
 )
 
 pkg_for() {
@@ -126,7 +128,7 @@ install_pkgs() {
 
 # ── Runtime dependencies ───────────────────────────────────────────
 
-REQUIRED_BINS=(labwc grim xdotool wtype)
+REQUIRED_BINS=(labwc grim xdotool wtype wlr-randr wlrctl)
 OPTIONAL_BINS=(weston cage weston-screenshooter xev xclip xsel ydotool wl-copy)
 
 MISSING_REQUIRED=()

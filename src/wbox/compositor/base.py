@@ -16,6 +16,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -104,16 +105,20 @@ class CompositorServer:
     wayland_socket_name: str = ""
 
     def __init__(self, *, screen: str = "1280x800", instance_name: str = "",
-                 timeouts: dict | None = None, input_backend: str | dict = "x11"):
+                 timeouts: dict | None = None, input_backend: str | dict = "x11",
+                 undecorate: bool = True):
         from wbox.config import resolve_input_backend
         self.screen = screen
         self.instance_name = instance_name
         self.timeouts = timeouts or {}
         self.input_backends = resolve_input_backend(input_backend)
+        self.undecorate = undecorate
         # Use instance name for state file if available, else compositor name
         state_id = instance_name or self.compositor_name
         self._state_file = Path(tempfile.gettempdir()) / f"wbox_{state_id}_state.json"
         self.state = CompositorState.load(self._state_file) or CompositorState()
+        self._last_mouse_x: int = 0
+        self._last_mouse_y: int = 0
 
     def reload_state(self) -> None:
         """Reload state from disk (useful after /mcp reload when compositor is still running)."""
@@ -133,6 +138,31 @@ class CompositorServer:
     ) -> None:
         """Launch the compositor process. Must set self.state.compositor_proc."""
         raise NotImplementedError
+
+    def _post_compositor_start(self) -> None:
+        """Hook called after compositor and Xwayland are ready, before app launch."""
+        pass
+
+    def _post_app_start(self) -> None:
+        """Hook called after app has rendered (after app_render wait)."""
+        pass
+
+    def send_post_launch_keys(self, keys: list[str], delay: float = 0.5) -> None:
+        """Send key shortcuts after app launch (e.g. F11 for fullscreen).
+
+        Args:
+            keys: list of key shortcuts (e.g. ["F11", "ctrl+l"])
+            delay: seconds to wait before first key and between each key
+        """
+        import time as _time
+        _time.sleep(delay)
+        for shortcut in keys:
+            result = self.key(shortcut)
+            if "error" in result:
+                log.warning("post_launch_keys: %s failed: %s", shortcut, result["error"])
+            else:
+                log.info("post_launch_keys: sent %s", shortcut)
+            _time.sleep(delay)
 
     def _start_app(
         self,
@@ -203,12 +233,22 @@ class CompositorServer:
             }
         self.state.x_display = x_display
 
+        # Hook for post-compositor setup (e.g. resize nested window)
+        self._post_compositor_start()
+
         # Launch app into compositor (no-op for cage)
         self._start_app(app_cmd, app_env)
 
         # Wait for app to render
         render_wait = self.timeouts.get("app_render", 3)
         time.sleep(render_wait)
+
+        # Hook for post-app setup (e.g. fullscreen)
+        self._post_app_start()
+
+        # Remove window decorations on X11 windows (labwc SSD)
+        if self.undecorate:
+            self._undecorate_x11_windows()
 
         self.state.compositor_pid = (
             self.state.compositor_proc.pid if self.state.compositor_proc else 0
@@ -396,10 +436,14 @@ class CompositorServer:
     def click(self, x: int, y: int, button: int = 1) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
+        self._last_mouse_x, self._last_mouse_y = x, y
+        if self.input_backends["mouse"] == "wbox-pointer":
+            return self._vptr_click(x, y, button)
         if self.input_backends["mouse"] == "ydotool":
             return self._wl_click(x, y, button)
         self._xdotool("mousemove", str(x), str(y))
         time.sleep(0.05)
+        self._focus_active_window()
         return self._xdotool("click", str(button))
 
     def type_text(self, text: str, delay_ms: int = 12) -> dict:
@@ -421,6 +465,9 @@ class CompositorServer:
     def mouse_move(self, x: int, y: int) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
+        self._last_mouse_x, self._last_mouse_y = x, y
+        if self.input_backends["mouse"] == "wbox-pointer":
+            return self._vptr_move(x, y)
         if self.input_backends["mouse"] == "ydotool":
             return self._wl_mouse_move(x, y)
         return self._xdotool("mousemove", str(x), str(y))
@@ -428,18 +475,9 @@ class CompositorServer:
     def get_mouse_position(self) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
-        result = self._xdotool("getmouselocation")
-        # Parse "x:123 y:456 screen:0 window:789"
-        text = result.get("stdout", "")
-        pos = {}
-        for part in text.split():
-            if ":" in part:
-                k, v = part.split(":", 1)
-                try:
-                    pos[k] = int(v)
-                except ValueError:
-                    pos[k] = v
-        return {"ok": True, "x": pos.get("x"), "y": pos.get("y")}
+        # Return last known position tracked by click/mouse_move.
+        # xdotool getmouselocation is unreliable on Xwayland.
+        return {"ok": True, "x": self._last_mouse_x, "y": self._last_mouse_y}
 
     # ── Clipboard ────────────────────────────────────────────────────
 
@@ -452,6 +490,9 @@ class CompositorServer:
             if not self.state.wayland_display:
                 return None
             env["WAYLAND_DISPLAY"] = self.state.wayland_display
+            env["XDG_RUNTIME_DIR"] = os.environ.get(
+                "XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"
+            )
         else:
             if not self.state.x_display:
                 self.reload_state()
@@ -498,7 +539,7 @@ class CompositorServer:
         import shutil
         if self.input_backends["clipboard"] == "wayland":
             if shutil.which("wl-copy"):
-                cmd = ["wl-copy", "--"]
+                cmd = ["wl-copy", "--paste-once", "--"]
                 result = subprocess.run(cmd + [text], env=env, capture_output=True, text=True, timeout=5)
                 if result.returncode != 0:
                     return {"error": f"wl-copy failed: {result.stderr.strip()}"}
@@ -523,7 +564,91 @@ class CompositorServer:
 
         return {"ok": True, "length": len(text)}
 
+    # ── Window management ──────────────────────────────────────────
+
+    def list_windows(self) -> dict:
+        """List windows/toplevels in the compositor via wlrctl."""
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        import shutil
+        if not shutil.which("wlrctl"):
+            return {"error": "wlrctl not found — install wlrctl"}
+        env = self._wl_env()
+        result = subprocess.run(
+            ["wlrctl", "toplevel", "list"],
+            env=env, capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return {"error": f"wlrctl failed: {result.stderr.strip()}"}
+        windows = []
+        for line in result.stdout.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Format: "app_id: title"
+            if ": " in line:
+                app_id, title = line.split(": ", 1)
+                windows.append({"app_id": app_id, "title": title})
+            else:
+                windows.append({"app_id": "", "title": line})
+        return {"windows": windows}
+
+    def focus_window(self, title: str = "", app_id: str = "") -> dict:
+        """Focus/raise a window by title or app_id via wlrctl."""
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        import shutil
+        if not shutil.which("wlrctl"):
+            return {"error": "wlrctl not found — install wlrctl"}
+        env = self._wl_env()
+        cmd = ["wlrctl", "toplevel", "focus"]
+        if app_id:
+            cmd.extend(["app_id:" + app_id])
+        elif title:
+            cmd.extend(["title:" + title])
+        else:
+            return {"error": "provide title or app_id"}
+        result = subprocess.run(
+            cmd, env=env, capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return {"error": f"wlrctl focus failed: {result.stderr.strip()}"}
+        return {"ok": True}
+
     # ── Internal helpers ────────────────────────────────────────────
+
+    def _undecorate_x11_windows(self) -> None:
+        """Remove SSD from all X11 windows via _MOTIF_WM_HINTS.
+
+        labwc serverDecoration="no" in rc.xml doesn't always work for
+        Xwayland windows. Setting _MOTIF_WM_HINTS with decorations=0
+        tells the WM to remove its server-side decorations.
+        """
+        if not self.state.x_display:
+            return
+        import shutil
+        if not shutil.which("xprop"):
+            return
+        env = os.environ.copy()
+        env["DISPLAY"] = self.state.x_display
+        # List all X11 windows
+        result = subprocess.run(
+            ["xdotool", "search", "--onlyvisible", "--name", ""],
+            env=env, capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return
+        for wid in result.stdout.strip().splitlines():
+            wid = wid.strip()
+            if not wid:
+                continue
+            # _MOTIF_WM_HINTS: flags=2 (decorations), decorations=0
+            subprocess.run(
+                ["xprop", "-id", wid, "-f", "_MOTIF_WM_HINTS", "32c",
+                 "-set", "_MOTIF_WM_HINTS", "2, 0, 0, 0, 0"],
+                env=env, capture_output=True, timeout=5,
+            )
+        log.info("Undecorated X11 windows on %s", self.state.x_display)
 
     def _focus_active_window(self) -> None:
         """Force X11 focus on the active window.
@@ -583,9 +708,10 @@ class CompositorServer:
         env = self._wl_env()
         # wtype uses -M for modifier down, -m for modifier up, -k for key
         # Convert xdotool "ctrl+shift+a" → wtype -M ctrl -M shift -k a -m shift -m ctrl
+        _WTYPE_MOD_MAP = {"super": "logo", "Super_L": "logo", "Super_R": "logo"}
         parts = shortcut.split("+")
         key = parts[-1]
-        modifiers = parts[:-1]
+        modifiers = [_WTYPE_MOD_MAP.get(m, m) for m in parts[:-1]]
         cmd = ["wtype"]
         for m in modifiers:
             cmd.extend(["-M", m])
@@ -632,6 +758,37 @@ class CompositorServer:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
             return {"error": f"ydotool mousemove failed: {result.stderr.strip()}"}
+        return {"ok": True}
+
+    # ── wbox-pointer (Wayland virtual pointer) ─────────────────────
+
+    def _vptr_cmd(self) -> list[str]:
+        """Build base command for wbox-pointer.py."""
+        tool = Path(__file__).resolve().parent.parent.parent.parent / "tools" / "wbox-pointer" / "wbox-pointer.py"
+        return [sys.executable, str(tool)]
+
+    def _vptr_env(self) -> dict:
+        env = os.environ.copy()
+        env["WAYLAND_DISPLAY"] = self.state.wayland_display
+        env["WBOX_SCREEN"] = self.screen
+        return env
+
+    def _vptr_move(self, x: int, y: int) -> dict:
+        """Move mouse via wbox-pointer (Wayland virtual pointer)."""
+        cmd = self._vptr_cmd() + ["move", str(x), str(y)]
+        result = subprocess.run(cmd, env=self._vptr_env(),
+                                capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return {"error": f"wbox-pointer move failed: {result.stderr.strip()}"}
+        return {"ok": True}
+
+    def _vptr_click(self, x: int, y: int, button: int = 1) -> dict:
+        """Click via wbox-pointer (Wayland virtual pointer)."""
+        cmd = self._vptr_cmd() + ["click", str(x), str(y), str(button)]
+        result = subprocess.run(cmd, env=self._vptr_env(),
+                                capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return {"error": f"wbox-pointer click failed: {result.stderr.strip()}"}
         return {"ok": True}
 
     # ── Input debugging ────────────────────────────────────────────

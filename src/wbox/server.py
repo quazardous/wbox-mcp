@@ -27,7 +27,7 @@ from mcp.types import (
 import sys
 
 from .compositor import CompositorServer
-from .config import load_config, resolve_dir
+from .config import apply_overrides, load_config, resolve_dir
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
     instance_name = cfg.get("name", "")
     timeouts = cfg.get("timeouts", {})
     input_backend = cfg.get("input_backend", "hybrid")
+    undecorate = cfg.get("undecorate", True)
 
     if backend == "win32":
         from .compositor.win32 import Win32Compositor
@@ -59,6 +60,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
             instance_name=instance_name,
             timeouts=timeouts,
             input_backend=input_backend,
+            undecorate=undecorate,
         )
     elif backend == "labwc":
         from .compositor.labwc import LabwcCompositor
@@ -67,6 +69,8 @@ def build_compositor(cfg: dict) -> CompositorServer:
             instance_name=instance_name,
             timeouts=timeouts,
             input_backend=input_backend,
+            undecorate=undecorate,
+            keyboard_layout=cfg.get("keyboard_layout", ""),
         )
         return comp
     else:
@@ -76,6 +80,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
             instance_name=instance_name,
             timeouts=timeouts,
             input_backend=input_backend,
+            undecorate=undecorate,
         )
 
 
@@ -415,6 +420,22 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 },
             ),
             Tool(
+                name="list_windows",
+                description="List all windows/toplevels in the compositor",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            Tool(
+                name="focus_window",
+                description="Focus/raise a window by title or app_id",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Window title (substring match)"},
+                        "app_id": {"type": "string", "description": "Application ID"},
+                    },
+                },
+            ),
+            Tool(
                 name="clean",
                 description="Clean logs and screenshots",
                 inputSchema={"type": "object", "properties": {}},
@@ -573,6 +594,17 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
             result = compositor.resize(arguments["width"], arguments["height"])
             return [TextContent(type="text", text=str(result))]
 
+        if name == "list_windows":
+            result = compositor.list_windows()
+            return [TextContent(type="text", text=str(result))]
+
+        if name == "focus_window":
+            result = compositor.focus_window(
+                title=arguments.get("title", ""),
+                app_id=arguments.get("app_id", ""),
+            )
+            return [TextContent(type="text", text=str(result))]
+
         if name == "clean":
             cleaned = []
             for d, label in [
@@ -633,10 +665,12 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
     return mcp, compositor
 
 
-async def amain(config_path: str | None = None):
+async def amain(config_path: str | None = None, overrides: list[str] | None = None):
     cfg = load_config(config_path or "config.yaml")
     if not cfg.get("_config_dir"):
         cfg["_config_dir"] = str(Path(config_path).parent) if config_path else "."
+    if overrides:
+        apply_overrides(cfg, overrides)
 
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"

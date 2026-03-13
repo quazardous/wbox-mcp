@@ -17,12 +17,12 @@ _IS_WIN32 = sys.platform == "win32"
 INPUT_BACKEND_PRESETS = {
     "x11": {"keyboard": "xdotool", "mouse": "xdotool", "clipboard": "x11"},
     "wayland": {"keyboard": "wtype", "mouse": "ydotool", "clipboard": "wayland"},
-    "hybrid": {"keyboard": "wtype", "mouse": "xdotool", "clipboard": "wayland"},
+    "hybrid": {"keyboard": "wtype", "mouse": "wbox-pointer", "clipboard": "x11"},
 }
 
 _VALID_BACKENDS = {
     "keyboard": ("xdotool", "wtype"),
-    "mouse": ("xdotool", "ydotool"),
+    "mouse": ("xdotool", "ydotool", "wbox-pointer"),
     "clipboard": ("x11", "wayland"),
 }
 
@@ -104,6 +104,29 @@ def load_config(path: str | Path) -> dict:
     cfg = yaml.safe_load(p.read_text()) or {}
     cfg["_config_dir"] = str(p.parent)
     cfg["_config_path"] = str(p)
+    return cfg
+
+
+def apply_overrides(cfg: dict, overrides: list[str]) -> dict:
+    """Apply key=value overrides to config dict.
+
+    Supports dotted keys for nested values (e.g. "log.level=debug").
+    Values are parsed as YAML scalars (so numbers, bools work naturally).
+    """
+    for item in overrides:
+        if "=" not in item:
+            raise ValueError(f"invalid override {item!r}, expected key=value")
+        key, raw_value = item.split("=", 1)
+        # Parse value as YAML scalar
+        value = yaml.safe_load(raw_value)
+
+        parts = key.split(".")
+        target = cfg
+        for part in parts[:-1]:
+            if part not in target or not isinstance(target[part], dict):
+                target[part] = {}
+            target = target[part]
+        target[parts[-1]] = value
     return cfg
 
 
