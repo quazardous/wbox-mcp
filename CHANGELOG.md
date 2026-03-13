@@ -27,6 +27,9 @@
 - **Granular input backend config**: `input_backend` can now be a string preset (`hybrid`, `x11`, `wayland`) or a per-function dict (`keyboard`, `mouse`, `clipboard`). The `hybrid` preset (wtype keyboard + xdotool mouse + wl-clipboard) is the new default — zero interference with the user's desktop.
 - **`--input-backend` CLI flag**: non-interactive init now supports `--input-backend hybrid|x11|wayland`
 - **`examples/config.sample.yaml`**: full config reference with all options documented
+- **`get_mouse_position` tool**: returns current cursor coordinates inside the compositor
+- **Headless script tools**: custom script tools with `headless: true` run without requiring the compositor to be running
+- **Script tool arguments as env vars**: MCP tool arguments are forwarded to scripts as `WBOX_ARG_<NAME>` environment variables
 
 ### Changed
 

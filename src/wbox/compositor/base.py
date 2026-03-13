@@ -425,6 +425,22 @@ class CompositorServer:
             return self._wl_mouse_move(x, y)
         return self._xdotool("mousemove", str(x), str(y))
 
+    def get_mouse_position(self) -> dict:
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        result = self._xdotool("getmouselocation")
+        # Parse "x:123 y:456 screen:0 window:789"
+        text = result.get("stdout", "")
+        pos = {}
+        for part in text.split():
+            if ":" in part:
+                k, v = part.split(":", 1)
+                try:
+                    pos[k] = int(v)
+                except ValueError:
+                    pos[k] = v
+        return {"ok": True, "x": pos.get("x"), "y": pos.get("y")}
+
     # ── Clipboard ────────────────────────────────────────────────────
 
     def _clipboard_env(self) -> dict | None:
@@ -549,7 +565,7 @@ class CompositorServer:
         )
         if result.returncode != 0:
             return {"error": f"xdotool failed (DISPLAY={self.state.x_display}): {result.stderr.strip()}"}
-        return {"ok": True}
+        return {"ok": True, "stdout": result.stdout.strip()}
 
     # ── Wayland input helpers ─────────────────────────────────────
 

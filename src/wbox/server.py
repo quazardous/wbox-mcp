@@ -125,11 +125,12 @@ async def _run_script_tool(
 
     resolved_args = [a.format(**context) for a in args]
 
-    if not compositor.state.wayland_display:
-        compositor.reload_state()
+    if not tool_def.get("headless"):
+        if not compositor.state.wayland_display:
+            compositor.reload_state()
 
-    if not compositor.is_running():
-        return f"Error: compositor is not running. Call 'launch' first.\n(state: wayland_display={compositor.state.wayland_display!r}, pid={compositor.state.compositor_pid})"
+        if not compositor.is_running():
+            return f"Error: compositor is not running. Call 'launch' first.\n(state: wayland_display={compositor.state.wayland_display!r}, pid={compositor.state.compositor_pid})"
 
     env = os.environ.copy()
     # Remove venv from env so scripts use system tools
@@ -147,6 +148,9 @@ async def _run_script_tool(
     env["COMPOSITOR_X_DISPLAY"] = compositor.state.x_display
     # Forward app env
     env.update(app_env)
+    # Forward MCP tool arguments as WBOX_ARG_<NAME> env vars
+    for k, v in arguments.items():
+        env[f"WBOX_ARG_{k.upper()}"] = str(v)
 
     cmd = [script] + resolved_args
     tool_name = Path(script).stem
@@ -389,6 +393,11 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 },
             ),
             Tool(
+                name="get_mouse_position",
+                description="Get the current mouse cursor position",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            Tool(
                 name="get_size",
                 description="Get the current compositor display size",
                 inputSchema={"type": "object", "properties": {}},
@@ -550,6 +559,10 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
 
         if name == "mouse_move":
             result = compositor.mouse_move(arguments["x"], arguments["y"])
+            return [TextContent(type="text", text=str(result))]
+
+        if name == "get_mouse_position":
+            result = compositor.get_mouse_position()
             return [TextContent(type="text", text=str(result))]
 
         if name == "get_size":
