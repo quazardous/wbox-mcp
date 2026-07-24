@@ -54,17 +54,21 @@ class CageCompositor(CompositorServer):
 
         log.info("Launching cage: %s", " ".join(cage_cmd))
 
-        # Capture stderr to log file for debugging
-        stderr_target: int | object
+        # Capture stderr to log file for debugging. An unread PIPE would fill
+        # up and block the compositor — without a log file, discard instead.
         if self._log_file:
             self._log_file.parent.mkdir(parents=True, exist_ok=True)
-            stderr_target = open(self._log_file, "w")
             log.info("Cage stderr → %s", self._log_file)
+            with open(self._log_file, "w") as stderr_target:
+                # the child dups the fd — closing our handle is correct
+                self.state.compositor_proc = subprocess.Popen(
+                    cage_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=stderr_target,
+                )
         else:
-            stderr_target = subprocess.PIPE
-
-        self.state.compositor_proc = subprocess.Popen(
-            cage_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=stderr_target,
-        )
+            self.state.compositor_proc = subprocess.Popen(
+                cage_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )

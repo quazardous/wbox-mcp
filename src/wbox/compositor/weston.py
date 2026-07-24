@@ -40,8 +40,6 @@ class WestonCompositor(CompositorServer):
         state_id = instance_name or self.compositor_name
         self.wayland_socket_name = f"wbox-{state_id}"
         self._ini_path: Path | None = None
-        self._last_app_cmd: list[str] = []
-        self._last_app_env: dict[str, str] = {}
 
     def _write_ini(self) -> Path:
         shell_so = {
@@ -108,26 +106,7 @@ class WestonCompositor(CompositorServer):
         app_cmd: list[str],
         app_env: dict[str, str],
     ) -> None:
-        if not app_cmd:
-            return
-
-        self._last_app_cmd = list(app_cmd)
-        self._last_app_env = dict(app_env)
-
-        env = os.environ.copy()
-        env["DISPLAY"] = self.state.x_display
-        env["WAYLAND_DISPLAY"] = self.state.wayland_display
-        env.update(app_env)
-
-        log.info("Launching app in weston: %s", " ".join(app_cmd))
-
-        self.state.app_proc = subprocess.Popen(
-            app_cmd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        self.state.app_pid = self.state.app_proc.pid
+        self._spawn_app(app_cmd, app_env)
 
     def _find_host_window(self) -> str:
         if self.backend != "x11":
@@ -193,17 +172,14 @@ class WestonCompositor(CompositorServer):
         self.screen = f"{width}x{height}"
         return self.launch(app_cmd, app_env)
 
-    def screenshot(self, name: str | None = None) -> dict:
+    def screenshot(self, name: str | None = None, scale: float | None = None,
+                   region: str | None = None) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
+        if scale or region:
+            return {"error": "scale/region not supported by the weston backend"}
 
-        self.state.screenshot_seq += 1
-        if not name:
-            name = f"{self.compositor_name}_{self.state.screenshot_seq:04d}.png"
-        elif not name.endswith(".png"):
-            name += ".png"
-
-        out_path = self.state.screenshot_dir / name
+        out_path = self._next_screenshot_path(name)
         env = os.environ.copy()
         env["WAYLAND_DISPLAY"] = self.state.wayland_display
 

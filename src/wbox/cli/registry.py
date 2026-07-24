@@ -235,8 +235,7 @@ def cmd_init(args: list[str]):
         cfg = dict(DEFAULT_CONFIG)
         cfg.update({k: v for k, v in existing.items() if not k.startswith("_")})
 
-    # Check if we have enough flags for non-interactive mode
-    has_flags = any(k in flags for k in ("name", "compositor", "app_command", "from_file"))
+    # has_flags computed above decides interactive vs non-interactive
     interactive = _is_interactive() and not has_flags
 
     if interactive:
@@ -555,7 +554,8 @@ def cmd_tool_list(directory: str | None = None):
 
     builtins = [
         "launch", "stop", "kill", "screenshot", "click", "type_text",
-        "key", "keys", "mouse_move", "get_size", "resize",
+        "key", "keys", "mouse_move", "get_mouse_position",
+        "get_size", "resize", "list_windows", "focus_window",
         "clipboard_read", "clipboard_write",
         "clean", "tail_log", "debug_input",
     ]

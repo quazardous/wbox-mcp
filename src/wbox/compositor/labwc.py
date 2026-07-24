@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -36,8 +37,6 @@ class LabwcCompositor(CompositorServer):
         # labwc doesn't support deterministic socket naming — use diff-based detection
         self.wayland_socket_name = ""
         self._config_dir: Path | None = None
-        self._last_app_cmd: list[str] = []
-        self._last_app_env: dict[str, str] = {}
         self._log_file: Path | None = None
         self._clip_procs: list[subprocess.Popen] = []
         self._clip_guard: Path | None = None
@@ -94,47 +93,33 @@ class LabwcCompositor(CompositorServer):
 
         log.info("Launching labwc: %s", " ".join(labwc_cmd))
 
-        stderr_target: int | object
+        # An unread PIPE would fill up and block the compositor — without a
+        # log file, discard stderr instead.
         if self._log_file:
             self._log_file.parent.mkdir(parents=True, exist_ok=True)
-            stderr_target = open(self._log_file, "w")
             log.info("labwc stderr → %s", self._log_file)
+            with open(self._log_file, "w") as stderr_target:
+                # the child dups the fd — closing our handle is correct
+                self.state.compositor_proc = subprocess.Popen(
+                    labwc_cmd,
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=stderr_target,
+                )
         else:
-            stderr_target = subprocess.PIPE
-
-        self.state.compositor_proc = subprocess.Popen(
-            labwc_cmd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=stderr_target,
-        )
+            self.state.compositor_proc = subprocess.Popen(
+                labwc_cmd,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
     def _start_app(
         self,
         app_cmd: list[str],
         app_env: dict[str, str],
     ) -> None:
-        if not app_cmd:
-            return
-
-        self._last_app_cmd = list(app_cmd)
-        self._last_app_env = dict(app_env)
-
-        env = os.environ.copy()
-        env["WAYLAND_DISPLAY"] = self.state.wayland_display
-        if self.state.x_display:
-            env["DISPLAY"] = self.state.x_display
-        env.update(app_env)
-
-        log.info("Launching app in labwc: %s", " ".join(app_cmd))
-
-        self.state.app_proc = subprocess.Popen(
-            app_cmd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        self.state.app_pid = self.state.app_proc.pid
+        self._spawn_app(app_cmd, app_env)
 
     def _post_compositor_start(self) -> None:
         """Resize the nested labwc window and start clipboard bridge."""
@@ -231,7 +216,6 @@ class LabwcCompositor(CompositorServer):
                 capture_output=True, text=True, timeout=5,
             )
             if result.returncode == 0:
-                import re
                 m = re.search(r"(\d+)x(\d+)\s+px\s+\(current\)", result.stdout)
                 if m:
                     return {"width": int(m.group(1)), "height": int(m.group(2))}

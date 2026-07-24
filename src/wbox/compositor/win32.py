@@ -804,17 +804,14 @@ class Win32Compositor(CompositorServer):
 
     # ── Screenshot ───────────────────────────────────────────────
 
-    def screenshot(self, name: str | None = None) -> dict:
+    def screenshot(self, name: str | None = None, scale: float | None = None,
+                   region: str | None = None) -> dict:
         if not self.is_running():
             return {"error": "app is not running"}
         if not self._hwnd:
             return {"error": "no window handle"}
-
-        self.state.screenshot_seq += 1
-        if not name:
-            name = f"win32_{self.state.screenshot_seq:04d}.png"
-        elif not name.endswith(".png"):
-            name += ".png"
+        if scale or region:
+            return {"error": "scale/region not supported by the win32 backend"}
 
         # Capture main window
         main_capture = capture_window_raw(self._hwnd)
@@ -858,7 +855,7 @@ class Win32Compositor(CompositorServer):
         else:
             png_data = bgra_to_png(main_buf, main_w, main_h)
 
-        out_path = self.state.screenshot_dir / name
+        out_path = self._next_screenshot_path(name)
         out_path.write_bytes(png_data)
 
         result = {"path": str(out_path), "size": out_path.stat().st_size}

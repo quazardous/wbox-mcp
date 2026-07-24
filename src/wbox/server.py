@@ -10,10 +10,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import datetime
+import json
 import logging
+import logging.handlers
 import os
 import shlex
 import subprocess
+from collections import deque
 from pathlib import Path
 
 from mcp.server import Server
@@ -101,6 +104,35 @@ def _build_app_env(cfg: dict) -> dict[str, str]:
     return dict(app_cfg.get("env", {}))
 
 
+def _reply(result) -> list[TextContent]:
+    """Render a compositor result compactly for the model.
+
+    {'ok': True, ...} noise becomes 'ok'; errors become a plain string;
+    anything else is valid JSON instead of a Python repr.
+    """
+    if isinstance(result, dict):
+        if "error" in result:
+            text = f"Error: {result['error']}"
+        else:
+            slim = {k: v for k, v in result.items()
+                    if not (k == "ok" and v is True) and v != ""}
+            text = json.dumps(slim, default=str) if slim else "ok"
+    else:
+        text = str(result)
+    return [TextContent(type="text", text=text)]
+
+
+def _cap_output(text: str, logfile: Path, head: int = 20, tail: int = 80) -> str:
+    """Bound script output returned to the model; the full log stays on disk."""
+    lines = text.splitlines()
+    if len(lines) <= head + tail:
+        return text
+    kept = (lines[:head]
+            + [f"... ({len(lines) - head - tail} lines truncated, full log: {logfile})"]
+            + lines[-tail:])
+    return "\n".join(kept) + "\n"
+
+
 # ── Script-mapped tools ────────────────────────────────────────────
 
 
@@ -128,7 +160,10 @@ async def _run_script_tool(
     context.update(app_env)
     context.update(arguments)
 
-    resolved_args = [a.format(**context) for a in args]
+    try:
+        resolved_args = [a.format(**context) for a in args]
+    except (KeyError, IndexError, ValueError) as exc:
+        return f"Error: bad placeholder in tool args {args!r}: {exc}"
 
     if not tool_def.get("headless"):
         if not compositor.state.wayland_display:
@@ -166,75 +201,79 @@ async def _run_script_tool(
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cwd = str(Path(cfg.get("_config_dir", ".")).resolve())
 
-    f = logfile.open("w")
-    f.write(f"=== {tool_name} ===\n")
-    f.write(f"started: {now}\n")
-    f.write(f"command: {' '.join(cmd)}\n")
-    f.write(f"cwd:     {cwd}\n")
-    f.write(f"env:\n")
-    for k in sorted(env):
-        if k.startswith(("WBOX_", "COMPOSITOR_", "DISPLAY", "WAYLAND_", "GDK_", "SAL_")):
-            f.write(f"  {k}={env[k]}\n")
-    f.write(f"\n--- output ---\n")
-    f.flush()
-
     # Timeout: per-tool > global config > 120s default
     timeout = tool_def.get("timeout", cfg.get("tool_timeout", 120))
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        env=env,
-        cwd=cwd,
-    )
-
     stdout_lines = []
     timed_out = False
-    try:
-        deadline = asyncio.get_event_loop().time() + timeout
-        while True:
-            remaining = deadline - asyncio.get_event_loop().time()
-            if remaining <= 0:
-                timed_out = True
-                break
-            try:
-                line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
-            except asyncio.TimeoutError:
-                timed_out = True
-                break
-            if not line:
-                break
-            text = line.decode(errors="replace")
-            stdout_lines.append(text)
-            ts = datetime.datetime.now().strftime("%H:%M:%S")
-            f.write(f"[{ts}] {text}")
-            f.flush()
-    except Exception as exc:
-        f.write(f"\n--- exception: {exc} ---\n")
+    proc = None
+    with logfile.open("w") as f:
+        f.write(f"=== {tool_name} ===\n")
+        f.write(f"started: {now}\n")
+        f.write(f"command: {' '.join(cmd)}\n")
+        f.write(f"cwd:     {cwd}\n")
+        f.write(f"env:\n")
+        for k in sorted(env):
+            if k.startswith(("WBOX_", "COMPOSITOR_", "DISPLAY", "WAYLAND_", "GDK_", "SAL_")):
+                f.write(f"  {k}={env[k]}\n")
+        f.write(f"\n--- output ---\n")
+        f.flush()
 
-    if timed_out:
-        f.write(f"\n--- TIMEOUT after {timeout}s, killing ---\n")
         try:
-            proc.kill()
-            await proc.wait()
-        except Exception:
-            pass
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env,
+                cwd=cwd,
+            )
+        except OSError as exc:
+            f.write(f"\n--- failed to start: {exc} ---\n")
+            return f"Error: cannot run script '{script}': {exc}"
 
-    if proc.returncode is None:
-        await proc.wait()
+        try:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    timed_out = True
+                    break
+                if not line:
+                    break
+                text = line.decode(errors="replace")
+                stdout_lines.append(text)
+                ts = datetime.datetime.now().strftime("%H:%M:%S")
+                f.write(f"[{ts}] {text}")
+                f.flush()
+        except Exception as exc:
+            f.write(f"\n--- exception: {exc} ---\n")
+        finally:
+            if timed_out:
+                f.write(f"\n--- TIMEOUT after {timeout}s, killing ---\n")
+            if proc.returncode is None:
+                if timed_out:
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+                await proc.wait()
 
-    stdout_text = "".join(stdout_lines)
+        end = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"\n--- finished: {end}, exit_code: {proc.returncode} ---\n")
 
-    end = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    f.write(f"\n--- finished: {end}, exit_code: {proc.returncode} ---\n")
-    f.close()
+    stdout_text = _cap_output("".join(stdout_lines), logfile)
 
     if timed_out:
         return f"Script timed out after {timeout}s (killed)\n{stdout_text}\n(full log: {logfile})"
     if proc.returncode != 0:
         return f"Script exited with code {proc.returncode}\n{stdout_text}\n(full log: {logfile})"
-    return stdout_text or "(no output)"
+    return (stdout_text or "(no output)") + f"\n(full log: {logfile})"
 
 
 # ── MCP Server ──────────────────────────────────────────────────────
@@ -258,16 +297,21 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
         if isinstance(compositor, (CageCompositor, LabwcCompositor)):
             compositor.set_log_dir(cfg["_log_dir"])
 
-    # Setup file logging
+    # Setup file logging (rotating, and idempotent across create_server calls)
     log_level = cfg.get("log", {}).get("level", "info").upper()
     log_file = cfg["_log_dir"] / "wbox-mcp.log"
-    file_handler = logging.FileHandler(log_file)
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file, maxBytes=2_000_000, backupCount=2)
     file_handler.setFormatter(logging.Formatter(
         "%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     ))
-    logging.getLogger("wbox").addHandler(file_handler)
-    logging.getLogger("wbox").setLevel(getattr(logging, log_level, logging.INFO))
+    wbox_logger = logging.getLogger("wbox")
+    for h in [h for h in wbox_logger.handlers if isinstance(h, logging.FileHandler)]:
+        wbox_logger.removeHandler(h)
+        h.close()
+    wbox_logger.addHandler(file_handler)
+    wbox_logger.setLevel(getattr(logging, log_level, logging.INFO))
 
     server_name = cfg.get("name", "wbox-mcp")
     mcp = Server(server_name)
@@ -311,6 +355,14 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                         "name": {
                             "type": "string",
                             "description": "Optional filename for the screenshot",
+                        },
+                        "scale": {
+                            "type": "number",
+                            "description": "Scale factor (e.g. 0.5 for half size) — Linux/grim only",
+                        },
+                        "region": {
+                            "type": "string",
+                            "description": "Capture region 'x,y WxH' — Linux/grim only",
                         },
                     },
                 },
@@ -527,22 +579,25 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
 
             result = await asyncio.to_thread(compositor.launch, app_cmd, app_env)
             log.info("launch result: %s", result)
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "stop":
             result = await asyncio.to_thread(compositor.stop)
             log.info("stop result: %s", result)
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "kill":
             result = await asyncio.to_thread(
                 compositor.kill, aggressive=arguments.get("aggressive", True)
             )
             log.info("kill result: %s", result)
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "screenshot":
-            result = await asyncio.to_thread(compositor.screenshot, arguments.get("name"))
+            result = await asyncio.to_thread(
+                compositor.screenshot, arguments.get("name"),
+                arguments.get("scale"), arguments.get("region"),
+            )
             if "error" in result:
                 return [TextContent(type="text", text=result["error"])]
             img_path = Path(result["path"])
@@ -551,6 +606,7 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
             img_data = base64.standard_b64encode(img_bytes).decode()
             return [
                 ImageContent(type="image", data=img_data, mimeType="image/png"),
+                TextContent(type="text", text=result["path"]),
             ]
 
         if name == "click":
@@ -558,15 +614,15 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 compositor.click,
                 arguments["x"], arguments["y"], arguments.get("button", 1),
             )
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "type_text":
             result = await asyncio.to_thread(compositor.type_text, arguments["text"])
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "key":
             result = await asyncio.to_thread(compositor.key, arguments["shortcut"])
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "keys":
             shortcuts = arguments.get("shortcuts")
@@ -588,25 +644,25 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
             result = await asyncio.to_thread(
                 compositor.mouse_move, arguments["x"], arguments["y"]
             )
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "get_mouse_position":
             result = await asyncio.to_thread(compositor.get_mouse_position)
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "get_size":
             result = await asyncio.to_thread(compositor.get_size)
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "resize":
             result = await asyncio.to_thread(
                 compositor.resize, arguments["width"], arguments["height"]
             )
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "list_windows":
             result = await asyncio.to_thread(compositor.list_windows)
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "focus_window":
             result = await asyncio.to_thread(
@@ -614,7 +670,7 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 title=arguments.get("title", ""),
                 app_id=arguments.get("app_id", ""),
             )
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "clean":
             cleaned = []
@@ -646,9 +702,12 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
             log_file = cfg["_log_dir"] / "wbox-mcp.log"
             if not log_file.exists():
                 return [TextContent(type="text", text="No log file found")]
-            lines = log_file.read_text().splitlines()
-            tail = lines[-n:]
-            return [TextContent(type="text", text="\n".join(tail))]
+
+            def _tail():
+                with log_file.open(errors="replace") as fh:
+                    return "".join(deque(fh, maxlen=n))
+
+            return [TextContent(type="text", text=await asyncio.to_thread(_tail))]
 
         if name == "debug_input":
             result = await asyncio.to_thread(
@@ -656,7 +715,7 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 arguments.get("test_key", "a"),
                 arguments.get("target", "xev"),
             )
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         if name == "clipboard_read":
             result = await asyncio.to_thread(compositor.clipboard_read)
@@ -666,7 +725,7 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
 
         if name == "clipboard_write":
             result = await asyncio.to_thread(compositor.clipboard_write, arguments["text"])
-            return [TextContent(type="text", text=str(result))]
+            return _reply(result)
 
         # Script-mapped tools
         if name in script_tools:

@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -121,6 +122,25 @@ class CompositorServer:
         self._last_mouse_y: int = 0
         # Persistent wbox-pointer Wayland connection (lazy, see _vptr_client)
         self._vptr = None
+        # Last app command/env, kept for restart (separate-app backends)
+        self._last_app_cmd: list[str] = []
+        self._last_app_env: dict[str, str] = {}
+
+    @staticmethod
+    def _run_cmd(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+        """subprocess.run wrapper: missing binaries and timeouts become a
+        nonzero returncode instead of an exception escaping the MCP handler."""
+        kwargs.setdefault("capture_output", True)
+        kwargs.setdefault("text", True)
+        kwargs.setdefault("timeout", 10)
+        try:
+            return subprocess.run(cmd, **kwargs)
+        except FileNotFoundError:
+            return subprocess.CompletedProcess(
+                cmd, 127, "", f"{cmd[0]} not found — install it")
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(
+                cmd, 124, "", f"{cmd[0]} timed out")
 
     def reload_state(self) -> None:
         """Reload state from disk (useful after /mcp reload when compositor is still running)."""
@@ -156,15 +176,14 @@ class CompositorServer:
             keys: list of key shortcuts (e.g. ["F11", "ctrl+l"])
             delay: seconds to wait before first key and between each key
         """
-        import time as _time
-        _time.sleep(delay)
+        time.sleep(delay)
         for shortcut in keys:
             result = self.key(shortcut)
             if "error" in result:
                 log.warning("post_launch_keys: %s failed: %s", shortcut, result["error"])
             else:
                 log.info("post_launch_keys: sent %s", shortcut)
-            _time.sleep(delay)
+            time.sleep(delay)
 
     def _start_app(
         self,
@@ -176,6 +195,30 @@ class CompositorServer:
         Override for compositors where app is launched separately (e.g. weston).
         No-op for compositors where app starts with compositor (e.g. cage).
         """
+
+    def _spawn_app(self, app_cmd: list[str], app_env: dict[str, str]) -> None:
+        """Shared _start_app body for separate-app backends (weston, labwc)."""
+        if not app_cmd:
+            return
+
+        self._last_app_cmd = list(app_cmd)
+        self._last_app_env = dict(app_env)
+
+        env = os.environ.copy()
+        env["WAYLAND_DISPLAY"] = self.state.wayland_display
+        if self.state.x_display:
+            env["DISPLAY"] = self.state.x_display
+        env.update(app_env)
+
+        log.info("Launching app in %s: %s", self.compositor_name, " ".join(app_cmd))
+
+        self.state.app_proc = subprocess.Popen(
+            app_cmd,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.state.app_pid = self.state.app_proc.pid
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
@@ -376,7 +419,17 @@ class CompositorServer:
                 except ProcessLookupError:
                     pass
 
-        time.sleep(1)
+        # Reap our own children so SIGKILLed processes don't linger as zombies,
+        # then wait (briefly) for externally-tracked pids to vanish
+        for proc in (self.state.compositor_proc, self.state.app_proc):
+            if proc is not None:
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+        self._poll_until(
+            lambda: not any(_pid_alive(p) for p in (pid, app_pid) if p),
+            timeout=1)
         self._teardown()
         self._clean_stale_sockets()
         self.state.compositor_proc = None
@@ -413,28 +466,37 @@ class CompositorServer:
 
     # ── Screenshot ──────────────────────────────────────────────────
 
-    def screenshot(self, name: str | None = None) -> dict:
-        """Capture the compositor display. Returns the image path."""
-        if not self.is_running():
-            return {"error": "compositor is not running"}
-
+    def _next_screenshot_path(self, name: str | None) -> Path:
+        """Allocate the output path for a screenshot (shared naming scheme)."""
         self.state.screenshot_seq += 1
         if not name:
             name = f"{self.compositor_name}_{self.state.screenshot_seq:04d}.png"
         elif not name.endswith(".png"):
             name += ".png"
+        return self.state.screenshot_dir / name
 
-        out_path = self.state.screenshot_dir / name
+    def screenshot(self, name: str | None = None, scale: float | None = None,
+                   region: str | None = None) -> dict:
+        """Capture the compositor display. Returns the image path.
+
+        scale: grim -s factor (e.g. 0.5 halves the image, cheaper for the model)
+        region: grim -g geometry "x,y WxH" to capture a sub-rectangle
+        """
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+
+        out_path = self._next_screenshot_path(name)
         env = os.environ.copy()
         env["WAYLAND_DISPLAY"] = self.state.wayland_display
 
-        result = subprocess.run(
-            ["grim", str(out_path)],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        cmd = ["grim"]
+        if scale:
+            cmd += ["-s", str(scale)]
+        if region:
+            cmd += ["-g", region]
+        cmd.append(str(out_path))
+
+        result = self._run_cmd(cmd, env=env)
         if result.returncode != 0:
             return {"error": f"grim failed: {result.stderr.strip()}"}
         return {"path": str(out_path), "size": out_path.stat().st_size}
@@ -537,7 +599,6 @@ class CompositorServer:
         if not env:
             return {"error": "no display available"}
 
-        import shutil
         if self.input_backends["clipboard"] == "wayland":
             if shutil.which("wl-paste"):
                 cmd = ["wl-paste", "--no-newline"]
@@ -551,7 +612,7 @@ class CompositorServer:
             else:
                 return {"error": "no clipboard tool found — install xclip or xsel"}
 
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=5)
+        result = self._run_cmd(cmd, env=env, timeout=5)
         if result.returncode != 0:
             return {"error": f"clipboard read failed: {result.stderr.strip()}"}
         return {"text": result.stdout}
@@ -564,11 +625,10 @@ class CompositorServer:
         if not env:
             return {"error": "no display available"}
 
-        import shutil
         if self.input_backends["clipboard"] == "wayland":
             if shutil.which("wl-copy"):
                 cmd = ["wl-copy", "--paste-once", "--"]
-                result = subprocess.run(cmd + [text], env=env, capture_output=True, text=True, timeout=5)
+                result = self._run_cmd(cmd + [text], env=env, timeout=5)
                 if result.returncode != 0:
                     return {"error": f"wl-copy failed: {result.stderr.strip()}"}
             else:
@@ -576,7 +636,7 @@ class CompositorServer:
         else:
             if shutil.which("xsel"):
                 cmd = ["xsel", "--clipboard", "--input"]
-                result = subprocess.run(cmd, input=text, env=env, capture_output=True, text=True, timeout=5)
+                result = self._run_cmd(cmd, input=text, env=env, timeout=5)
                 if result.returncode != 0:
                     return {"error": f"xsel write failed: {result.stderr.strip()}"}
             elif shutil.which("xclip"):
@@ -598,14 +658,10 @@ class CompositorServer:
         """List windows/toplevels in the compositor via wlrctl."""
         if not self.is_running():
             return {"error": "compositor is not running"}
-        import shutil
         if not shutil.which("wlrctl"):
             return {"error": "wlrctl not found — install wlrctl"}
         env = self._wl_env()
-        result = subprocess.run(
-            ["wlrctl", "toplevel", "list"],
-            env=env, capture_output=True, text=True, timeout=5,
-        )
+        result = self._run_cmd(["wlrctl", "toplevel", "list"], env=env, timeout=5)
         if result.returncode != 0:
             return {"error": f"wlrctl failed: {result.stderr.strip()}"}
         windows = []
@@ -625,7 +681,6 @@ class CompositorServer:
         """Focus/raise a window by title or app_id via wlrctl."""
         if not self.is_running():
             return {"error": "compositor is not running"}
-        import shutil
         if not shutil.which("wlrctl"):
             return {"error": "wlrctl not found — install wlrctl"}
         env = self._wl_env()
@@ -636,9 +691,7 @@ class CompositorServer:
             cmd.extend(["title:" + title])
         else:
             return {"error": "provide title or app_id"}
-        result = subprocess.run(
-            cmd, env=env, capture_output=True, text=True, timeout=5,
-        )
+        result = self._run_cmd(cmd, env=env, timeout=5)
         if result.returncode != 0:
             return {"error": f"wlrctl focus failed: {result.stderr.strip()}"}
         return {"ok": True}
@@ -654,15 +707,14 @@ class CompositorServer:
         """
         if not self.state.x_display:
             return
-        import shutil
         if not shutil.which("xprop"):
             return
         env = os.environ.copy()
         env["DISPLAY"] = self.state.x_display
         # List all X11 windows
-        result = subprocess.run(
+        result = self._run_cmd(
             ["xdotool", "search", "--onlyvisible", "--name", ""],
-            env=env, capture_output=True, text=True, timeout=5,
+            env=env, timeout=5,
         )
         if result.returncode != 0:
             return
@@ -671,10 +723,10 @@ class CompositorServer:
             if not wid:
                 continue
             # _MOTIF_WM_HINTS: flags=2 (decorations), decorations=0
-            subprocess.run(
+            self._run_cmd(
                 ["xprop", "-id", wid, "-f", "_MOTIF_WM_HINTS", "32c",
                  "-set", "_MOTIF_WM_HINTS", "2, 0, 0, 0, 0"],
-                env=env, capture_output=True, timeout=5,
+                env=env, timeout=5, text=False,
             )
         log.info("Undecorated X11 windows on %s", self.state.x_display)
 
@@ -693,13 +745,7 @@ class CompositorServer:
     def _get_active_window(self) -> str:
         env = os.environ.copy()
         env["DISPLAY"] = self.state.x_display
-        result = subprocess.run(
-            ["xdotool", "getactivewindow"],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
+        result = self._run_cmd(["xdotool", "getactivewindow"], env=env, timeout=5)
         if result.returncode == 0:
             return result.stdout.strip()
         return ""
@@ -713,9 +759,7 @@ class CompositorServer:
         env["DISPLAY"] = self.state.x_display
         cmd = ["xdotool", *args]
         log.debug("xdotool DISPLAY=%s cmd=%s", self.state.x_display, cmd)
-        result = subprocess.run(
-            cmd, env=env, capture_output=True, text=True, timeout=timeout,
-        )
+        result = self._run_cmd(cmd, env=env, timeout=timeout)
         if result.returncode != 0:
             return {"error": f"xdotool failed (DISPLAY={self.state.x_display}): {result.stderr.strip()}"}
         return {"ok": True, "stdout": result.stdout.strip()}
@@ -753,7 +797,7 @@ class CompositorServer:
         env = self._wl_env()
         cmd = ["wtype"] + self._wtype_combo_args(shortcut)
         log.debug("wtype cmd=%s", cmd)
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=10)
+        result = self._run_cmd(cmd, env=env)
         if result.returncode != 0:
             return {"error": f"wtype failed: {result.stderr.strip()}"}
         return {"ok": True}
@@ -772,8 +816,7 @@ class CompositorServer:
             cmd.extend(self._wtype_combo_args(shortcut))
         log.debug("wtype cmd=%s", cmd)
         total_delay = delay_ms * len(shortcuts) / 1000.0
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True,
-                                timeout=10 + total_delay)
+        result = self._run_cmd(cmd, env=env, timeout=10 + total_delay)
         if result.returncode != 0:
             return {"error": f"wtype failed: {result.stderr.strip()}", "sent": 0}
         return {"ok": True, "sent": len(shortcuts)}
@@ -786,7 +829,7 @@ class CompositorServer:
             return {"error": "no wayland_display available"}
         env = self._wl_env()
         cmd = ["wtype", "-d", str(delay_ms), "--", text]
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=30)
+        result = self._run_cmd(cmd, env=env, timeout=30)
         if result.returncode != 0:
             return {"error": f"wtype failed: {result.stderr.strip()}"}
         return {"ok": True}
@@ -800,7 +843,7 @@ class CompositorServer:
         btn_code = btn_map.get(button, "0x00")
         cmd = ["ydotool", "click", btn_code]
         log.debug("ydotool click cmd=%s", cmd)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        result = self._run_cmd(cmd)
         if result.returncode != 0:
             return {"error": f"ydotool click failed: {result.stderr.strip()}"}
         return {"ok": True}
@@ -809,7 +852,7 @@ class CompositorServer:
         """Move mouse via ydotool."""
         cmd = ["ydotool", "mousemove", "--absolute", "-x", str(x), "-y", str(y)]
         log.debug("ydotool mousemove cmd=%s", cmd)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        result = self._run_cmd(cmd)
         if result.returncode != 0:
             return {"error": f"ydotool mousemove failed: {result.stderr.strip()}"}
         return {"ok": True}
@@ -878,10 +921,7 @@ class CompositorServer:
         wid = self._get_active_window()
         wid_name = ""
         if wid:
-            r = subprocess.run(
-                ["xdotool", "getwindowname", wid],
-                env=env, capture_output=True, text=True, timeout=5,
-            )
+            r = self._run_cmd(["xdotool", "getwindowname", wid], env=env, timeout=5)
             wid_name = r.stdout.strip() if r.returncode == 0 else ""
 
         if target == "active":
@@ -913,18 +953,16 @@ class CompositorServer:
     def _debug_input_xev(self, test_key: str, env: dict) -> dict:
         state_id = self.instance_name or self.compositor_name
         logfile = Path(tempfile.gettempdir()) / f"wbox_{state_id}_xev.log"
-        xev_proc = subprocess.Popen(
-            ["xev", "-event", "keyboard"],
-            stdout=open(logfile, "w"),
-            stderr=subprocess.DEVNULL,
-            env=env,
-        )
+        with open(logfile, "w") as xev_out:
+            xev_proc = subprocess.Popen(
+                ["xev", "-event", "keyboard"],
+                stdout=xev_out,
+                stderr=subprocess.DEVNULL,
+                env=env,
+            )
         time.sleep(0.5)
 
-        subprocess.run(
-            ["xdotool", "key", "--", test_key],
-            env=env, capture_output=True, timeout=5,
-        )
+        self._run_cmd(["xdotool", "key", "--", test_key], env=env, timeout=5)
         time.sleep(0.3)
 
         xev_proc.terminate()
@@ -943,16 +981,33 @@ class CompositorServer:
             "xev_output": output,
         }
 
+    def _poll_until(self, check, timeout: float, fail_fast=None):
+        """Poll check() until truthy, with 20ms→200ms backoff on a monotonic clock.
+
+        Returns check()'s first truthy result, or None on timeout / when
+        fail_fast() turns truthy (e.g. the compositor died).
+        """
+        deadline = time.monotonic() + timeout
+        delay = 0.02
+        while time.monotonic() < deadline:
+            if fail_fast is not None and fail_fast():
+                return None
+            result = check()
+            if result:
+                return result
+            time.sleep(delay)
+            delay = min(delay * 2, 0.2)
+        return None
+
+    def _compositor_died(self) -> bool:
+        proc = self.state.compositor_proc
+        return proc is not None and proc.poll() is not None
+
     def _wait_for_named_socket(self, sock_path: Path, timeout: float = 10) -> str:
         """Wait for a specific socket file to appear."""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self.state.compositor_proc and self.state.compositor_proc.poll() is not None:
-                return ""
-            if sock_path.exists():
-                return sock_path.name
-            time.sleep(0.3)
-        return ""
+        return self._poll_until(
+            lambda: sock_path.name if sock_path.exists() else "",
+            timeout, fail_fast=self._compositor_died) or ""
 
     def _wait_for_wayland_display(
         self, before: set[Path], timeout: float = 10,
@@ -961,34 +1016,30 @@ class CompositorServer:
         runtime_dir = Path(
             os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
         )
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self.state.compositor_proc and self.state.compositor_proc.poll() is not None:
-                return ""
-            current = set(runtime_dir.glob("wayland-*"))
-            new = current - before
-            if new:
-                return sorted(new)[0].name
-            time.sleep(0.3)
-        return ""
+
+        def check():
+            new = set(runtime_dir.glob("wayland-*")) - before
+            return sorted(new)[0].name if new else ""
+
+        return self._poll_until(check, timeout, fail_fast=self._compositor_died) or ""
 
     def _wait_for_xwayland(self, before: set[Path], timeout: float = 15) -> str:
         x11_dir = Path("/tmp/.X11-unix")
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self.state.compositor_proc and self.state.compositor_proc.poll() is not None:
-                log.error("%s exited early (code=%s)", self.compositor_name,
-                          self.state.compositor_proc.returncode)
-                return ""
+
+        def check():
             current = set(x11_dir.glob("X*")) if x11_dir.exists() else set()
             new = current - before
             if new:
-                sock = sorted(new)[0]
-                m = re.search(r"X(\d+)$", sock.name)
+                m = re.search(r"X(\d+)$", sorted(new)[0].name)
                 if m:
                     return f":{m.group(1)}"
-            time.sleep(0.3)
-        return ""
+            return ""
+
+        result = self._poll_until(check, timeout, fail_fast=self._compositor_died)
+        if result is None and self._compositor_died():
+            log.error("%s exited early (code=%s)", self.compositor_name,
+                      self.state.compositor_proc.returncode)
+        return result or ""
 
     @staticmethod
     def _socket_alive(path: Path) -> bool:
