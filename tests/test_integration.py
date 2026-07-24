@@ -18,7 +18,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -31,7 +30,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 CRASH_DUMMY_DIR = Path(__file__).parent / "crash-dummy"
-CRASH_DUMMY_LOG = CRASH_DUMMY_DIR / "log" / "crash_dummy.log"
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -45,11 +43,14 @@ class CheckResult:
     delta: float | None = None
 
 
-def parse_log_lines(path: Path, prefix: str) -> list[str]:
-    """Return log lines matching a prefix."""
-    if not path.exists():
-        return []
-    return [l for l in path.read_text().splitlines() if prefix in l]
+def _stop_proc(proc: subprocess.Popen):
+    """Terminate a child, escalating to kill — never raises from a finally."""
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
 
 
 def parse_root_coords(line: str) -> tuple[int, int] | None:
@@ -105,7 +106,7 @@ class WboxTestHarness:
     """Manages a compositor + crash_dummy for testing."""
 
     def __init__(self, compositor: str, input_backend: str, app_mode: str,
-                 undecorate: bool = True, screen: str = "800x600"):
+                 undecorate: bool = True, screen: str = "800x600", tag: str = ""):
         self.compositor = compositor
         self.input_backend = input_backend
         self.app_mode = app_mode
@@ -113,18 +114,27 @@ class WboxTestHarness:
         self.screen = screen
         self.comp = None
         self._combo = f"{compositor}/{input_backend}/{app_mode}"
+        # tag distinguishes concurrent harnesses of the same combo (module
+        # scope keeps several alive at once): unique instance name and log
+        suffix = f"-{tag}" if tag else ""
+        self.instance = f"test-{compositor}-{input_backend}-{app_mode}{suffix}"
+        self.log_path = CRASH_DUMMY_DIR / "log" / f"{self.instance}.log"
+        self.fifo_path = CRASH_DUMMY_DIR / "log" / f"{self.instance}.fifo"
+        # Log lines before this mark are hidden from log_lines() — lets a
+        # shared (module-scoped) harness give each test a fresh log view
+        self._log_mark = 0
 
     def launch(self) -> dict:
         from wbox.config import resolve_input_backend
         from wbox.server import build_compositor
 
         # Clean previous log
-        CRASH_DUMMY_LOG.parent.mkdir(parents=True, exist_ok=True)
-        if CRASH_DUMMY_LOG.exists():
-            CRASH_DUMMY_LOG.unlink()
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.log_path.exists():
+            self.log_path.unlink()
 
         cfg = {
-            "name": f"test-{self.compositor}-{self.input_backend}-{self.app_mode}",
+            "name": self.instance,
             "compositor": self.compositor,
             "screen": self.screen,
             "input_backend": self.input_backend,
@@ -148,7 +158,8 @@ class WboxTestHarness:
 
         app_cmd = ["python3", str(CRASH_DUMMY_DIR / "crash_dummy.py")]
         app_env = {
-            "CRASH_DUMMY_LOG": str(CRASH_DUMMY_LOG),
+            "CRASH_DUMMY_LOG": str(self.log_path),
+            "CRASH_DUMMY_FIFO": str(self.fifo_path),
             "CRASH_DUMMY_MODE": self.app_mode,
             "CRASH_DUMMY_SIZE": self.screen,
         }
@@ -158,19 +169,19 @@ class WboxTestHarness:
             # Wait for crash_dummy to be ready (log contains "ready")
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
-                if CRASH_DUMMY_LOG.exists() and "ready" in CRASH_DUMMY_LOG.read_text():
+                if self.log_path.exists() and "ready" in self.log_path.read_text():
                     break
-                time.sleep(0.5)
-            time.sleep(0.5)
+                time.sleep(0.1)
+            time.sleep(0.3)
         return result
 
     def kill(self):
         if self.comp:
             try:
+                # comp.kill() already waits for the pids to vanish
                 self.comp.kill(aggressive=True)
             except Exception:
                 pass
-            time.sleep(0.5)
 
     @property
     def x_display(self) -> str:
@@ -180,8 +191,36 @@ class WboxTestHarness:
     def app_pid(self) -> int:
         return self.comp.state.app_pid if self.comp else 0
 
+    def send_cmd(self, cmd: str, timeout: float = 3) -> bool:
+        """Send a command to crash_dummy through its FIFO (non-blocking open,
+        so a dead app can't hang the test)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                fd = os.open(self.fifo_path, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError:
+                time.sleep(0.1)
+                continue
+            try:
+                os.write(fd, (cmd + "\n").encode())
+                return True
+            except OSError:
+                time.sleep(0.1)
+            finally:
+                os.close(fd)
+        return False
+
+    def _raw_log_lines(self) -> list[str]:
+        if not self.log_path.exists():
+            return []
+        return self.log_path.read_text(errors="replace").splitlines()
+
+    def mark_log(self):
+        """Hide everything logged so far from subsequent log_lines() calls."""
+        self._log_mark = len(self._raw_log_lines())
+
     def log_lines(self, prefix: str = "") -> list[str]:
-        return parse_log_lines(CRASH_DUMMY_LOG, prefix)
+        return [l for l in self._raw_log_lines()[self._log_mark:] if prefix in l]
 
     def last_log_line(self, prefix: str) -> str | None:
         lines = self.log_lines(prefix)
@@ -230,7 +269,10 @@ def combo_id(val):
 
 # ── Fixtures ─────────────────────────────────────────────────────────
 
-@pytest.fixture(params=COMPOSITOR_BACKENDS, ids=combo_id)
+# Module-scoped: one compositor launch per (backend, mode) combo instead of
+# one per test. Tests get per-test log isolation via mark_log (autouse below).
+
+@pytest.fixture(params=COMPOSITOR_BACKENDS, ids=combo_id, scope="module")
 def compositor_backend(request):
     compositor, backend = request.param
     if not _compositor_available(compositor):
@@ -240,12 +282,12 @@ def compositor_backend(request):
     return compositor, backend
 
 
-@pytest.fixture(params=APP_MODES)
+@pytest.fixture(params=APP_MODES, scope="module")
 def app_mode(request):
     return request.param
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def harness(compositor_backend, app_mode):
     compositor, backend = compositor_backend
     h = WboxTestHarness(compositor, backend, app_mode)
@@ -259,9 +301,10 @@ def harness(compositor_backend, app_mode):
 
 @pytest.fixture
 def harness_undecorate(compositor_backend):
-    """Harness specifically for undecorate=True with normal mode."""
+    """Harness for undecorate=True (one test — function scope avoids keeping
+    an extra compositor alive alongside the shared module harness)."""
     compositor, backend = compositor_backend
-    h = WboxTestHarness(compositor, backend, "normal", undecorate=True)
+    h = WboxTestHarness(compositor, backend, "normal", undecorate=True, tag="undec")
     result = h.launch()
     if "error" in result:
         h.kill()
@@ -272,15 +315,25 @@ def harness_undecorate(compositor_backend):
 
 @pytest.fixture
 def harness_decorate(compositor_backend):
-    """Harness specifically for undecorate=False with normal mode."""
+    """Harness for undecorate=False (one test — function scope, see above)."""
     compositor, backend = compositor_backend
-    h = WboxTestHarness(compositor, backend, "normal", undecorate=False)
+    h = WboxTestHarness(compositor, backend, "normal", undecorate=False, tag="dec")
     result = h.launch()
     if "error" in result:
         h.kill()
         pytest.skip(f"launch failed: {result['error']}")
     yield h
     h.kill()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_log_view(request):
+    """Give each test a fresh view of the shared crash_dummy log."""
+    for name in ("harness", "harness_undecorate", "harness_decorate"):
+        if name in request.fixturenames:
+            request.getfixturevalue(name).mark_log()
+            break
+    yield
 
 
 # ── Tests ────────────────────────────────────────────────────────────
@@ -319,8 +372,7 @@ class TestCrashDummySanity:
             assert "ready" in content, f"ready line missing: {content[:200]}"
             assert "configure" in content, f"configure line missing: {content[:200]}"
         finally:
-            proc.terminate()
-            proc.wait(timeout=5)
+            _stop_proc(proc)
 
     def test_crash_dummy_fixed_mode(self):
         """Launch crash_dummy in fixed mode, verify non-resizable."""
@@ -351,21 +403,22 @@ class TestCrashDummySanity:
             assert "mode=fixed" in content
             assert "ready" in content
         finally:
-            proc.terminate()
-            proc.wait(timeout=5)
+            _stop_proc(proc)
 
     def test_crash_dummy_popup_signal(self):
-        """Launch crash_dummy, send SIGUSR1, verify popup opens."""
+        """Launch crash_dummy, send open_popup via FIFO, verify popup opens."""
         display = os.environ.get("DISPLAY")
         if not display:
             pytest.skip("no host DISPLAY")
         log_path = CRASH_DUMMY_DIR / "log" / "sanity_popup.log"
+        fifo_path = CRASH_DUMMY_DIR / "log" / "sanity_popup.fifo"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if log_path.exists():
             log_path.unlink()
 
         env = os.environ.copy()
         env["CRASH_DUMMY_LOG"] = str(log_path)
+        env["CRASH_DUMMY_FIFO"] = str(fifo_path)
         env["CRASH_DUMMY_MODE"] = "normal"
         env["CRASH_DUMMY_SIZE"] = "400x300"
 
@@ -381,19 +434,20 @@ class TestCrashDummySanity:
                     break
                 time.sleep(0.3)
             # Open popup
-            os.kill(proc.pid, signal.SIGUSR1)
+            with open(fifo_path, "w") as fifo:
+                fifo.write("open_popup\n")
             time.sleep(1)
             content = log_path.read_text()
             assert "popup_opened" in content, f"popup not opened: {content[:300]}"
             assert "popup_geometry" in content, f"popup geometry missing: {content[:300]}"
             # Close popup
-            os.kill(proc.pid, signal.SIGUSR2)
+            with open(fifo_path, "w") as fifo:
+                fifo.write("close_popup\n")
             time.sleep(1)
             content = log_path.read_text()
             assert "popup_closed" in content, f"popup not closed: {content[-200:]}"
         finally:
-            proc.terminate()
-            proc.wait(timeout=5)
+            _stop_proc(proc)
 
 
 class TestLaunch:
@@ -543,7 +597,7 @@ class TestResize:
             pytest.skip(f"tools for {backend} not available")
 
         h = WboxTestHarness(compositor, backend, "normal",
-                            undecorate=False, screen="800x600")
+                            undecorate=False, screen="800x600", tag="resize")
         result = h.launch()
         if "error" in result:
             h.kill()
@@ -569,7 +623,7 @@ class TestResize:
             pytest.skip(f"tools for {backend} not available")
 
         h = WboxTestHarness(compositor, backend, "fixed",
-                            undecorate=False, screen="800x600")
+                            undecorate=False, screen="800x600", tag="resize")
         result = h.launch()
         if "error" in result:
             h.kill()
@@ -608,12 +662,18 @@ class TestResize:
 class TestPopup:
     """Verify popup dialog behavior."""
 
+    @pytest.fixture(autouse=True)
+    def _close_popup_after(self, harness):
+        # The harness is shared: close the popup so the next test's open_popup
+        # actually reopens it (crash_dummy's open is a no-op when already open)
+        yield
+        harness.send_cmd("close_popup")
+        time.sleep(0.3)
+
     def test_popup_via_signal(self, harness):
-        """SIGUSR1 should open popup, verify its geometry in log."""
-        pid = harness.app_pid
-        if not pid:
-            pytest.skip("no app PID")
-        os.kill(pid, signal.SIGUSR1)
+        """open_popup command should open popup, verify its geometry in log."""
+        if not harness.send_cmd("open_popup"):
+            pytest.skip("crash_dummy FIFO not available")
         time.sleep(1)
 
         popup_lines = harness.log_lines("popup_opened")
@@ -628,11 +688,9 @@ class TestPopup:
         assert size is not None, f"could not parse popup size: {geom_lines[-1]}"
 
     def test_popup_click(self, harness):
-        """Open popup via SIGUSR1, click inside it, verify in log."""
-        pid = harness.app_pid
-        if not pid:
-            pytest.skip("no app PID")
-        os.kill(pid, signal.SIGUSR1)
+        """Open popup via FIFO command, click inside it, verify in log."""
+        if not harness.send_cmd("open_popup"):
+            pytest.skip("crash_dummy FIFO not available")
         time.sleep(1)
 
         # Get popup position from log
@@ -656,37 +714,13 @@ class TestPopup:
         )
 
     def test_popup_close_signal(self, harness):
-        """SIGUSR2 should close popup."""
-        pid = harness.app_pid
-        if not pid:
-            pytest.skip("no app PID")
-        os.kill(pid, signal.SIGUSR1)
+        """close_popup command should close the popup."""
+        if not harness.send_cmd("open_popup"):
+            pytest.skip("crash_dummy FIFO not available")
         time.sleep(0.5)
-        os.kill(pid, signal.SIGUSR2)
+        harness.send_cmd("close_popup")
         time.sleep(0.5)
         close_lines = harness.log_lines("popup_closed")
         assert close_lines, "popup_closed not found in log"
 
 
-# ── Summary report ───────────────────────────────────────────────────
-
-def pytest_terminal_summary(terminalreporter, exitstatus, config):
-    """Print a summary table of results."""
-    reports = terminalreporter.stats
-    passed = len(reports.get("passed", []))
-    failed = len(reports.get("failed", []))
-    skipped = len(reports.get("skipped", []))
-    total = passed + failed + skipped
-
-    terminalreporter.write_sep("=", "wbox integration summary")
-    terminalreporter.write_line(
-        f"  PASSED: {passed}  FAILED: {failed}  SKIPPED: {skipped}  TOTAL: {total}"
-    )
-
-    if reports.get("failed"):
-        terminalreporter.write_sep("-", "failures")
-        for report in reports["failed"]:
-            terminalreporter.write_line(f"  FAIL: {report.nodeid}")
-            if report.longreprtext:
-                for line in report.longreprtext.splitlines()[:5]:
-                    terminalreporter.write_line(f"        {line}")

@@ -243,13 +243,16 @@ class CompositorServer:
 
         self._clean_stale_sockets()
 
-        # Snapshot existing X11 displays before launch (can't control X display number)
+        # Snapshot existing X11 displays before launch (can't control X display
+        # number). Only LIVE sockets: a stale file left by a dead compositor
+        # gets reused by the new one and a raw diff would never see it appear.
         x11_dir = Path("/tmp/.X11-unix")
-        x11_before = set(x11_dir.glob("X*")) if x11_dir.exists() else set()
+        x11_before = self._live_sockets(x11_dir, "X*")
 
         # For wayland: snapshot only needed if no deterministic socket name
         runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-        wl_before = set() if self.wayland_socket_name else set(Path(runtime_dir).glob("wayland-*"))
+        wl_before = set() if self.wayland_socket_name else self._live_sockets(
+            Path(runtime_dir), "wayland-*")
 
         # Start compositor
         self._start_compositor(app_cmd, app_env, wl_before, x11_before)
@@ -1018,7 +1021,7 @@ class CompositorServer:
         )
 
         def check():
-            new = set(runtime_dir.glob("wayland-*")) - before
+            new = self._live_sockets(runtime_dir, "wayland-*") - before
             return sorted(new)[0].name if new else ""
 
         return self._poll_until(check, timeout, fail_fast=self._compositor_died) or ""
@@ -1027,8 +1030,7 @@ class CompositorServer:
         x11_dir = Path("/tmp/.X11-unix")
 
         def check():
-            current = set(x11_dir.glob("X*")) if x11_dir.exists() else set()
-            new = current - before
+            new = self._live_sockets(x11_dir, "X*") - before
             if new:
                 m = re.search(r"X(\d+)$", sorted(new)[0].name)
                 if m:
@@ -1040,6 +1042,14 @@ class CompositorServer:
             log.error("%s exited early (code=%s)", self.compositor_name,
                       self.state.compositor_proc.returncode)
         return result or ""
+
+    @classmethod
+    def _live_sockets(cls, directory: Path, pattern: str) -> set[Path]:
+        """Sockets under directory matching pattern that accept connections
+        (skips stale socket files and .lock files)."""
+        if not directory.exists():
+            return set()
+        return {p for p in directory.glob(pattern) if cls._socket_alive(p)}
 
     @staticmethod
     def _socket_alive(path: Path) -> bool:
