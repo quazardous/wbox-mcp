@@ -245,9 +245,10 @@ class LabwcCompositor(CompositorServer):
         self._apply_screen_size()
         return self.get_size()
 
-    def stop(self) -> dict:
+    def _teardown(self) -> None:
+        # Called by both stop() and kill() — the bridge must not outlive either
         self._stop_clipboard_bridge()
-        return super().stop()
+        super()._teardown()
 
     def _find_host_window(self) -> str:
         """Find the labwc window on the host compositor (X11 host)."""

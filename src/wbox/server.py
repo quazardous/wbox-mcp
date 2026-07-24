@@ -618,6 +618,9 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
 
         if name == "clean":
             cleaned = []
+            # Never unlink the live server log — the FileHandler keeps the old
+            # inode open and all further logging would be silently lost
+            active_log = cfg["_log_dir"] / "wbox-mcp.log"
             for d, label in [
                 (cfg.get("_log_dir"), "logs"),
                 (cfg.get("_screenshot_dir"), "screenshots"),
@@ -626,7 +629,7 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                     count = 0
                     skipped = 0
                     for f in d.iterdir():
-                        if f.is_file():
+                        if f.is_file() and f != active_log:
                             try:
                                 f.unlink()
                                 count += 1

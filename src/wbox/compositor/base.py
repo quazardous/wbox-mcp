@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import signal
+import socket
 import subprocess
 import tempfile
 import time
@@ -332,7 +333,7 @@ class CompositorServer:
                 except ProcessLookupError:
                     pass
 
-        self._vptr_close()
+        self._teardown()
         self._clean_stale_sockets()
         self.state.compositor_proc = None
         self.state.compositor_pid = 0
@@ -376,7 +377,7 @@ class CompositorServer:
                     pass
 
         time.sleep(1)
-        self._vptr_close()
+        self._teardown()
         self._clean_stale_sockets()
         self.state.compositor_proc = None
         self.state.compositor_pid = 0
@@ -386,6 +387,10 @@ class CompositorServer:
         self.state.x_display = ""
         self.state.clear(self._state_file)
         return {"status": "killed", "killed": killed}
+
+    def _teardown(self) -> None:
+        """Extra cleanup shared by stop() and kill(). Subclasses extend this."""
+        self._vptr_close()
 
     def is_running(self) -> bool:
         if self.state.compositor_proc is not None:
@@ -985,6 +990,19 @@ class CompositorServer:
             time.sleep(0.3)
         return ""
 
+    @staticmethod
+    def _socket_alive(path: Path) -> bool:
+        """True if the Unix socket at path still accepts connections."""
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        try:
+            s.connect(str(path))
+            return True
+        except OSError:
+            return False
+        finally:
+            s.close()
+
     def _clean_stale_sockets(self):
         """Clean sockets/locks that belonged to this instance.
 
@@ -1008,15 +1026,21 @@ class CompositorServer:
         for wl_name in wl_names:
             sock = runtime_dir / wl_name
             lock = runtime_dir / f"{wl_name}.lock"
+            # Safety: never remove a socket whose owner still accepts
+            # connections (e.g. another server process for the same instance)
+            if sock.exists() and self._socket_alive(sock):
+                log.debug("Wayland socket %s is live — skipping clean", wl_name)
+                continue
+            removed = False
             for f in (sock, lock):
                 if f.exists():
                     try:
                         f.unlink(missing_ok=True)
+                        removed = True
                     except OSError:
                         pass
-            if not sock.exists() and wl_name == wl_display:
-                continue
-            log.info("Cleaned stale Wayland socket: %s", wl_name)
+            if removed:
+                log.info("Cleaned stale Wayland socket: %s", wl_name)
 
         # Clean X11 socket + lock (can't control display number, use state).
         # Safety: check the lock file PID — only clean if the process is dead.

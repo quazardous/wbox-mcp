@@ -991,6 +991,7 @@ class Win32Compositor(CompositorServer):
     def click(self, x: int, y: int, button: int = 1) -> dict:
         if not self.is_running():
             return {"error": "app is not running"}
+        self._last_mouse_x, self._last_mouse_y = x, y
 
         # Convert from screenshot coords (window-relative) to client coords
         dx, dy = client_offset(self._hwnd)
@@ -1128,6 +1129,7 @@ class Win32Compositor(CompositorServer):
     def mouse_move(self, x: int, y: int) -> dict:
         if not self.is_running():
             return {"error": "app is not running"}
+        self._last_mouse_x, self._last_mouse_y = x, y
 
         if self._use_sendinput_click(x, y):
             # SendInput path — handles WinUI3 elements
@@ -1147,6 +1149,38 @@ class Win32Compositor(CompositorServer):
         lparam = (ty << 16) | (tx & 0xFFFF)
         PostMessageW(target, WM_MOUSEMOVE, 0, lparam)
         return {"ok": True, "method": "PostMessage"}
+
+    # ── Window management ────────────────────────────────────────
+
+    def list_windows(self) -> dict:
+        """List visible top-level windows of the app process."""
+        if not self.is_running():
+            return {"error": "app is not running"}
+        windows = []
+        for hwnd in find_windows_by_pid(self.state.app_pid):
+            windows.append({
+                "app_id": get_class_name(hwnd),
+                "title": get_window_title(hwnd),
+            })
+        return {"windows": windows}
+
+    def focus_window(self, title: str = "", app_id: str = "") -> dict:
+        """Focus/raise a window by title substring (app_id matches class name)."""
+        if not self.is_running():
+            return {"error": "app is not running"}
+        if not title and not app_id:
+            return {"error": "provide title or app_id"}
+        for hwnd in find_windows_by_pid(self.state.app_pid):
+            if title and title.lower() in get_window_title(hwnd).lower():
+                pass
+            elif app_id and app_id.lower() in get_class_name(hwnd).lower():
+                pass
+            else:
+                continue
+            SetForegroundWindow(hwnd)
+            self._hwnd = hwnd
+            return {"ok": True, "hwnd": hex(hwnd)}
+        return {"error": f"no window matching title={title!r} app_id={app_id!r}"}
 
     # ── Window geometry ──────────────────────────────────────────
 

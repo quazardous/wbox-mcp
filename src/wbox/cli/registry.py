@@ -38,6 +38,7 @@ Register options:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -376,7 +377,7 @@ def _init_interactive(cfg: dict, config_path: Path):
 
     # Tools
     if _prompt_yn("Add custom script tools?", default=False):
-        _wizard_add_tools(cfg)
+        _wizard_add_tools(cfg, config_path)
 
 
 def _init_noninteractive(cfg: dict, flags: dict):
@@ -437,7 +438,36 @@ def _init_noninteractive(cfg: dict, flags: dict):
         cfg["tools"] = tools
 
 
-def _wizard_add_tools(cfg: dict):
+def _write_script_template(script_path: Path, name: str, description: str):
+    """Create a stub script for a custom tool if it doesn't exist yet."""
+    if script_path.exists():
+        return
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    if _IS_WIN32:
+        script_path.write_text(f"""# {name} — {description}
+#
+# Custom tool script for wbox-mcp (Windows)
+#
+
+Write-Host "{name}: not implemented yet"
+""")
+    else:
+        script_path.write_text(f"""#!/usr/bin/env bash
+# {name} — {description}
+#
+# Available env vars:
+#   WBOX_WAYLAND_DISPLAY  — compositor's Wayland display
+#   WBOX_X_DISPLAY        — compositor's Xwayland display
+#
+set -euo pipefail
+
+echo "{name}: not implemented yet"
+""")
+        script_path.chmod(0o755)
+    print(f"Created template: {script_path}")
+
+
+def _wizard_add_tools(cfg: dict, config_path: Path):
     """Interactive loop to add script tools."""
     tools = cfg.get("tools", {})
     script_ext = ".ps1" if _IS_WIN32 else ".sh"
@@ -453,32 +483,8 @@ def _wizard_add_tools(cfg: dict):
             "description": description,
         }
 
-        # Create script template if it doesn't exist
-        script_path = Path(cfg.get("_config_dir", ".")) / script
-        if not script_path.exists():
-            script_path.parent.mkdir(parents=True, exist_ok=True)
-            if _IS_WIN32:
-                script_path.write_text(f"""# {name} — {description}
-#
-# Custom tool script for wbox-mcp (Windows)
-#
-
-Write-Host "{name}: not implemented yet"
-""")
-            else:
-                script_path.write_text(f"""#!/usr/bin/env bash
-# {name} — {description}
-#
-# Available env vars:
-#   WBOX_WAYLAND_DISPLAY  — compositor's Wayland display
-#   WBOX_X_DISPLAY        — compositor's Xwayland display
-#
-set -euo pipefail
-
-echo "{name}: not implemented yet"
-""")
-                script_path.chmod(0o755)
-            print(f"  Created template: {script_path}")
+        # Scripts are resolved relative to the config file at runtime
+        _write_script_template(config_path.parent / script, name, description)
 
         if not _prompt_yn("  Add another tool?"):
             break
@@ -515,32 +521,7 @@ def cmd_tool_add(directory: str | None = None):
     print(f"Added tool '{name}' to {config_path}")
 
     # Create script template
-    base = config_path.parent
-    script_path = base / script
-    if not script_path.exists():
-        script_path.parent.mkdir(parents=True, exist_ok=True)
-        if _IS_WIN32:
-            script_path.write_text(f"""# {name} — {description}
-#
-# Custom tool script for wbox-mcp (Windows)
-#
-
-Write-Host "{name}: not implemented yet"
-""")
-        else:
-            script_path.write_text(f"""#!/usr/bin/env bash
-# {name} — {description}
-#
-# Available env vars:
-#   WBOX_WAYLAND_DISPLAY  — compositor's Wayland display
-#   WBOX_X_DISPLAY        — compositor's Xwayland display
-#
-set -euo pipefail
-
-echo "{name}: not implemented yet"
-""")
-            script_path.chmod(0o755)
-        print(f"Created template: {script_path}")
+    _write_script_template(config_path.parent / script, name, description)
 
 
 def cmd_tool_remove(name: str, directory: str | None = None):
@@ -605,6 +586,26 @@ def _resolve_mcp_json(global_: bool = False, file_: str | None = None) -> Path:
     return Path.cwd() / ".mcp.json"
 
 
+def _load_json_or_die(path: Path) -> dict:
+    """Read a JSON file, or exit rather than silently clobbering a broken one."""
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except ValueError as exc:
+        print(f"Error: cannot parse {path}: {exc}", file=sys.stderr)
+        print("Refusing to overwrite it — fix the file and retry.", file=sys.stderr)
+        sys.exit(1)
+
+
+def _write_json(path: Path, data: dict):
+    """Atomic JSON write (temp file + rename)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.replace(tmp, path)
+
+
 def _do_register(cfg: dict, config_path: Path, global_: bool = False,
                   file_: str | None = None, update_claude_settings: bool = False):
     """Write MCP entry into .mcp.json."""
@@ -612,19 +613,13 @@ def _do_register(cfg: dict, config_path: Path, global_: bool = False,
     name = cfg.get("name", "my-wbox")
     entry = _build_mcp_entry(cfg, config_path)
 
-    # Read existing or create new
-    data = {}
-    if mcp_json.exists():
-        try:
-            data = json.loads(mcp_json.read_text())
-        except Exception:
-            pass
+    data = _load_json_or_die(mcp_json)
 
     if "mcpServers" not in data:
         data["mcpServers"] = {}
 
     data["mcpServers"][name] = entry
-    mcp_json.write_text(json.dumps(data, indent=2) + "\n")
+    _write_json(mcp_json, data)
     print(f"Registered '{name}' in {mcp_json}")
 
     if update_claude_settings:
@@ -646,12 +641,7 @@ def _find_claude_settings() -> Path:
 def _add_claude_permission(server_name: str):
     """Add mcp__<name>__* wildcard permission to Claude settings."""
     settings_path = _find_claude_settings()
-    data = {}
-    if settings_path.exists():
-        try:
-            data = json.loads(settings_path.read_text())
-        except Exception:
-            pass
+    data = _load_json_or_die(settings_path)
 
     if "permissions" not in data:
         data["permissions"] = {}
@@ -661,8 +651,7 @@ def _add_claude_permission(server_name: str):
     perm = f"mcp__{server_name}__*"
     if perm not in data["permissions"]["allow"]:
         data["permissions"]["allow"].append(perm)
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(json.dumps(data, indent=2) + "\n")
+        _write_json(settings_path, data)
         print(f"Added permission '{perm}' to {settings_path}")
     else:
         print(f"Permission '{perm}' already in {settings_path}")
@@ -725,7 +714,7 @@ def cmd_unregister(args: list[str]):
         print(f"Error: {mcp_json} not found.", file=sys.stderr)
         sys.exit(1)
 
-    data = json.loads(mcp_json.read_text())
+    data = _load_json_or_die(mcp_json)
     servers = data.get("mcpServers", {})
 
     if name not in servers:
@@ -734,7 +723,7 @@ def cmd_unregister(args: list[str]):
 
     del servers[name]
     data["mcpServers"] = servers
-    mcp_json.write_text(json.dumps(data, indent=2) + "\n")
+    _write_json(mcp_json, data)
     print(f"Unregistered '{name}' from {mcp_json}")
 
 
