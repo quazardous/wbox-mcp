@@ -323,17 +323,16 @@ def map_to_child(parent: int, child: int, x: int, y: int) -> tuple[int, int]:
 
 def bgra_to_png(data: bytes, width: int, height: int) -> bytes:
     """Convert raw BGRA pixel buffer to PNG using only stdlib."""
-    raw_rows = bytearray()
+    rgba = bytearray(data)
+    rgba[0::4] = data[2::4]
+    rgba[2::4] = data[0::4]
     stride = width * 4
+    raw_rows = bytearray()
     for y in range(height):
         raw_rows.append(0)  # filter byte: None
-        offset = y * stride
-        for x in range(width):
-            px = offset + x * 4
-            b, g, r, a = data[px], data[px + 1], data[px + 2], data[px + 3]
-            raw_rows.extend((r, g, b, a))
+        raw_rows += rgba[y * stride:(y + 1) * stride]
 
-    compressed = zlib.compress(bytes(raw_rows), 9)
+    compressed = zlib.compress(bytes(raw_rows), 6)
 
     def chunk(chunk_type: bytes, chunk_data: bytes) -> bytes:
         c = chunk_type + chunk_data
@@ -841,18 +840,19 @@ class Win32Compositor(CompositorServer):
                 # Position relative to main window
                 ox = mrect.left - main_rect.left
                 oy = mrect.top - main_rect.top
-                # Blit modal onto composite
+                # Blit modal onto composite (whole clipped rows at a time)
+                x0 = max(0, -ox)
+                x1 = min(mw, main_w - ox)
+                if x1 <= x0:
+                    continue
+                span = (x1 - x0) * 4
                 for y in range(mh):
                     dy = oy + y
                     if dy < 0 or dy >= main_h:
                         continue
-                    for x in range(mw):
-                        dx = ox + x
-                        if dx < 0 or dx >= main_w:
-                            continue
-                        src_idx = (y * mw + x) * 4
-                        dst_idx = (dy * main_w + dx) * 4
-                        composite[dst_idx:dst_idx + 4] = mbuf[src_idx:src_idx + 4]
+                    src_idx = (y * mw + x0) * 4
+                    dst_idx = (dy * main_w + ox + x0) * 4
+                    composite[dst_idx:dst_idx + span] = mbuf[src_idx:src_idx + span]
             png_data = bgra_to_png(bytes(composite), main_w, main_h)
             log.info("Screenshot composited with %d modal(s)", len(modals))
         else:
@@ -1071,10 +1071,9 @@ class Win32Compositor(CompositorServer):
         has_modifiers = len(modifiers) > 0
 
         # When a XAML modal/dialog is visible, PostMessage to the edit control
-        # won't reach the dialog buttons — use SendInput instead
-        modal_visible = bool(self._find_modal_windows()) or self._has_xaml_dialog()
-
-        if has_modifiers or modal_visible:
+        # won't reach the dialog buttons — use SendInput instead. Checked lazily:
+        # the modal scan is a full EnumWindows, skip it when modifiers decide.
+        if has_modifiers or bool(self._find_modal_windows()) or self._has_xaml_dialog():
             # Key combos with modifiers, or any key when modal is visible:
             # need SetForegroundWindow + SendInput
             return self._send_key_combo(modifiers, main_key)
@@ -1088,6 +1087,19 @@ class Win32Compositor(CompositorServer):
             time.sleep(0.01)
             PostMessageW(target, WM_KEYUP, main_key, lparam_up)
             return {"ok": True, "method": "PostMessage"}
+
+    def keys(self, shortcuts: list[str], delay_ms: int = 100) -> dict:
+        if not self.is_running():
+            return {"error": "app is not running", "sent": 0}
+        sent = 0
+        for i, shortcut in enumerate(shortcuts):
+            result = self.key(shortcut)
+            if "error" in result:
+                return {"error": f"{shortcut}: {result['error']}", "sent": sent}
+            sent += 1
+            if i < len(shortcuts) - 1 and delay_ms > 0:
+                time.sleep(delay_ms / 1000.0)
+        return {"ok": True, "sent": sent}
 
     def _send_key_combo(self, modifiers: list[int], main_key: int) -> dict:
         """Send a key combo using SendInput (requires brief foreground focus)."""

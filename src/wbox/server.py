@@ -513,50 +513,59 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
             cwd = str(Path(cfg.get("_config_dir", ".")).resolve())
             for script in pre_launch_scripts:
                 log.info("pre_launch: %s", script)
-                result = subprocess.run(
-                    script, shell=True, cwd=cwd,
-                    capture_output=True, text=True, timeout=30,
-                )
+                try:
+                    result = await asyncio.to_thread(
+                        subprocess.run,
+                        script, shell=True, cwd=cwd,
+                        capture_output=True, text=True, timeout=30,
+                    )
+                except subprocess.TimeoutExpired:
+                    return [TextContent(type="text", text=f"pre_launch timed out after 30s: {script}")]
                 if result.returncode != 0:
-                    return [TextContent(type="text", text=f"pre_launch failed: {script}\n{result.stderr}")]
+                    out = "\n".join(s for s in (result.stdout, result.stderr) if s)
+                    return [TextContent(type="text", text=f"pre_launch failed: {script}\n{out}")]
 
-            result = compositor.launch(app_cmd, app_env)
+            result = await asyncio.to_thread(compositor.launch, app_cmd, app_env)
             log.info("launch result: %s", result)
             return [TextContent(type="text", text=str(result))]
 
         if name == "stop":
-            result = compositor.stop()
+            result = await asyncio.to_thread(compositor.stop)
             log.info("stop result: %s", result)
             return [TextContent(type="text", text=str(result))]
 
         if name == "kill":
-            result = compositor.kill(aggressive=arguments.get("aggressive", True))
+            result = await asyncio.to_thread(
+                compositor.kill, aggressive=arguments.get("aggressive", True)
+            )
             log.info("kill result: %s", result)
             return [TextContent(type="text", text=str(result))]
 
         if name == "screenshot":
-            result = compositor.screenshot(arguments.get("name"))
+            result = await asyncio.to_thread(compositor.screenshot, arguments.get("name"))
             if "error" in result:
                 return [TextContent(type="text", text=result["error"])]
             img_path = Path(result["path"])
             log.info("screenshot: %s (%d bytes)", img_path, result["size"])
-            img_data = base64.standard_b64encode(img_path.read_bytes()).decode()
+            img_bytes = await asyncio.to_thread(img_path.read_bytes)
+            img_data = base64.standard_b64encode(img_bytes).decode()
             return [
                 ImageContent(type="image", data=img_data, mimeType="image/png"),
             ]
 
         if name == "click":
-            result = compositor.click(
-                arguments["x"], arguments["y"], arguments.get("button", 1)
+            result = await asyncio.to_thread(
+                compositor.click,
+                arguments["x"], arguments["y"], arguments.get("button", 1),
             )
             return [TextContent(type="text", text=str(result))]
 
         if name == "type_text":
-            result = compositor.type_text(arguments["text"])
+            result = await asyncio.to_thread(compositor.type_text, arguments["text"])
             return [TextContent(type="text", text=str(result))]
 
         if name == "key":
-            result = compositor.key(arguments["shortcut"])
+            result = await asyncio.to_thread(compositor.key, arguments["shortcut"])
             return [TextContent(type="text", text=str(result))]
 
         if name == "keys":
@@ -568,38 +577,40 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 repeat = arguments.get("repeat", 1)
                 shortcuts = [shortcut] * repeat
             delay_ms = arguments.get("delay_ms", 100)
-            results = []
-            for i, sc in enumerate(shortcuts):
-                result = compositor.key(sc)
-                results.append(f"{sc}: {result}")
-                if "error" in result:
-                    break
-                if i < len(shortcuts) - 1 and delay_ms > 0:
-                    await asyncio.sleep(delay_ms / 1000.0)
-            return [TextContent(type="text", text=f"Sent {len(results)}/{len(shortcuts)} keys\n" + "\n".join(results))]
+            result = await asyncio.to_thread(compositor.keys, shortcuts, delay_ms)
+            if "error" in result:
+                text = f"Sent {result.get('sent', 0)}/{len(shortcuts)} keys\n{result['error']}"
+            else:
+                text = f"Sent {result.get('sent', len(shortcuts))}/{len(shortcuts)} keys"
+            return [TextContent(type="text", text=text)]
 
         if name == "mouse_move":
-            result = compositor.mouse_move(arguments["x"], arguments["y"])
+            result = await asyncio.to_thread(
+                compositor.mouse_move, arguments["x"], arguments["y"]
+            )
             return [TextContent(type="text", text=str(result))]
 
         if name == "get_mouse_position":
-            result = compositor.get_mouse_position()
+            result = await asyncio.to_thread(compositor.get_mouse_position)
             return [TextContent(type="text", text=str(result))]
 
         if name == "get_size":
-            result = compositor.get_size()
+            result = await asyncio.to_thread(compositor.get_size)
             return [TextContent(type="text", text=str(result))]
 
         if name == "resize":
-            result = compositor.resize(arguments["width"], arguments["height"])
+            result = await asyncio.to_thread(
+                compositor.resize, arguments["width"], arguments["height"]
+            )
             return [TextContent(type="text", text=str(result))]
 
         if name == "list_windows":
-            result = compositor.list_windows()
+            result = await asyncio.to_thread(compositor.list_windows)
             return [TextContent(type="text", text=str(result))]
 
         if name == "focus_window":
-            result = compositor.focus_window(
+            result = await asyncio.to_thread(
+                compositor.focus_window,
                 title=arguments.get("title", ""),
                 app_id=arguments.get("app_id", ""),
             )
@@ -637,20 +648,21 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
             return [TextContent(type="text", text="\n".join(tail))]
 
         if name == "debug_input":
-            result = compositor.debug_input(
+            result = await asyncio.to_thread(
+                compositor.debug_input,
                 arguments.get("test_key", "a"),
                 arguments.get("target", "xev"),
             )
             return [TextContent(type="text", text=str(result))]
 
         if name == "clipboard_read":
-            result = compositor.clipboard_read()
+            result = await asyncio.to_thread(compositor.clipboard_read)
             if "error" in result:
                 return [TextContent(type="text", text=result["error"])]
             return [TextContent(type="text", text=result["text"])]
 
         if name == "clipboard_write":
-            result = compositor.clipboard_write(arguments["text"])
+            result = await asyncio.to_thread(compositor.clipboard_write, arguments["text"])
             return [TextContent(type="text", text=str(result))]
 
         # Script-mapped tools

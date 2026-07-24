@@ -16,7 +16,6 @@ import os
 import re
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -119,6 +118,8 @@ class CompositorServer:
         self.state = CompositorState.load(self._state_file) or CompositorState()
         self._last_mouse_x: int = 0
         self._last_mouse_y: int = 0
+        # Persistent wbox-pointer Wayland connection (lazy, see _vptr_client)
+        self._vptr = None
 
     def reload_state(self) -> None:
         """Reload state from disk (useful after /mcp reload when compositor is still running)."""
@@ -331,6 +332,7 @@ class CompositorServer:
                 except ProcessLookupError:
                     pass
 
+        self._vptr_close()
         self._clean_stale_sockets()
         self.state.compositor_proc = None
         self.state.compositor_pid = 0
@@ -374,6 +376,7 @@ class CompositorServer:
                     pass
 
         time.sleep(1)
+        self._vptr_close()
         self._clean_stale_sockets()
         self.state.compositor_proc = None
         self.state.compositor_pid = 0
@@ -441,9 +444,11 @@ class CompositorServer:
             return self._vptr_click(x, y, button)
         if self.input_backends["mouse"] == "ydotool":
             return self._wl_click(x, y, button)
-        self._xdotool("mousemove", str(x), str(y))
-        time.sleep(0.05)
-        self._focus_active_window()
+        # Chain mousemove + focus into one xdotool spawn. The click stays a
+        # separate spawn: with a window on xdotool's stack, `click` would use
+        # XSendEvent, which GTK/LO ignore — bare `click` uses XTEST.
+        self._xdotool("mousemove", str(x), str(y), "getactivewindow",
+                      "windowactivate", "--sync", "windowfocus", "--sync")
         return self._xdotool("click", str(button))
 
     def type_text(self, text: str, delay_ms: int = 12) -> dict:
@@ -461,6 +466,24 @@ class CompositorServer:
             return self._wl_key(shortcut)
         self._focus_active_window()
         return self._xdotool("key", "--", shortcut)
+
+    def keys(self, shortcuts: list[str], delay_ms: int = 100) -> dict:
+        """Send a sequence of shortcuts, batched into one process when possible."""
+        if not self.is_running():
+            return {"error": "compositor is not running", "sent": 0}
+        if not shortcuts:
+            return {"ok": True, "sent": 0}
+        delay_ms = max(delay_ms, 0)
+        if self.input_backends["keyboard"] == "wtype":
+            return self._wl_keys(shortcuts, delay_ms)
+        # x11: focus once, then one xdotool spawn for the whole sequence
+        self._focus_active_window()
+        total_delay = delay_ms * len(shortcuts) / 1000.0
+        result = self._xdotool("key", "--delay", str(delay_ms), "--", *shortcuts,
+                               timeout=10 + total_delay)
+        if "error" in result:
+            return {"error": result["error"], "sent": 0}
+        return {"ok": True, "sent": len(shortcuts)}
 
     def mouse_move(self, x: int, y: int) -> dict:
         if not self.is_running():
@@ -656,11 +679,11 @@ class CompositorServer:
         xdotool --window uses XSendEvent which GTK/LO on Xwayland ignores.
         windowactivate + windowfocus sets real X11 input focus instead.
         """
-        wid = self._get_active_window()
-        if wid:
-            self._xdotool("windowactivate", "--sync", wid)
-            self._xdotool("windowfocus", "--sync", wid)
-            time.sleep(0.05)
+        # One chained spawn: getactivewindow pushes the window onto xdotool's
+        # stack, windowactivate/windowfocus consume it. Best-effort: the chain
+        # fails harmlessly when there is no active window (same as before).
+        self._xdotool("getactivewindow",
+                      "windowactivate", "--sync", "windowfocus", "--sync")
 
     def _get_active_window(self) -> str:
         env = os.environ.copy()
@@ -676,7 +699,7 @@ class CompositorServer:
             return result.stdout.strip()
         return ""
 
-    def _xdotool(self, *args: str) -> dict:
+    def _xdotool(self, *args: str, timeout: float = 10) -> dict:
         if not self.state.x_display:
             self.reload_state()
         if not self.state.x_display:
@@ -686,7 +709,7 @@ class CompositorServer:
         cmd = ["xdotool", *args]
         log.debug("xdotool DISPLAY=%s cmd=%s", self.state.x_display, cmd)
         result = subprocess.run(
-            cmd, env=env, capture_output=True, text=True, timeout=10,
+            cmd, env=env, capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode != 0:
             return {"error": f"xdotool failed (DISPLAY={self.state.x_display}): {result.stderr.strip()}"}
@@ -699,6 +722,23 @@ class CompositorServer:
         env["WAYLAND_DISPLAY"] = self.state.wayland_display
         return env
 
+    # wtype uses -M for modifier down, -m for modifier up, -k for key
+    _WTYPE_MOD_MAP = {"super": "logo", "Super_L": "logo", "Super_R": "logo"}
+
+    @classmethod
+    def _wtype_combo_args(cls, shortcut: str) -> list[str]:
+        """Convert xdotool "ctrl+shift+a" → -M ctrl -M shift -k a -m shift -m ctrl."""
+        parts = shortcut.split("+")
+        key = parts[-1]
+        modifiers = [cls._WTYPE_MOD_MAP.get(m, m) for m in parts[:-1]]
+        args = []
+        for m in modifiers:
+            args.extend(["-M", m])
+        args.extend(["-k", key])
+        for m in reversed(modifiers):
+            args.extend(["-m", m])
+        return args
+
     def _wl_key(self, shortcut: str) -> dict:
         """Send key via wtype. Translates xdotool-style shortcuts to wtype format."""
         if not self.state.wayland_display:
@@ -706,23 +746,32 @@ class CompositorServer:
         if not self.state.wayland_display:
             return {"error": "no wayland_display available"}
         env = self._wl_env()
-        # wtype uses -M for modifier down, -m for modifier up, -k for key
-        # Convert xdotool "ctrl+shift+a" → wtype -M ctrl -M shift -k a -m shift -m ctrl
-        _WTYPE_MOD_MAP = {"super": "logo", "Super_L": "logo", "Super_R": "logo"}
-        parts = shortcut.split("+")
-        key = parts[-1]
-        modifiers = [_WTYPE_MOD_MAP.get(m, m) for m in parts[:-1]]
-        cmd = ["wtype"]
-        for m in modifiers:
-            cmd.extend(["-M", m])
-        cmd.extend(["-k", key])
-        for m in reversed(modifiers):
-            cmd.extend(["-m", m])
+        cmd = ["wtype"] + self._wtype_combo_args(shortcut)
         log.debug("wtype cmd=%s", cmd)
         result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
             return {"error": f"wtype failed: {result.stderr.strip()}"}
         return {"ok": True}
+
+    def _wl_keys(self, shortcuts: list[str], delay_ms: int = 100) -> dict:
+        """Send a shortcut sequence in one wtype spawn (-s = sleep between combos)."""
+        if not self.state.wayland_display:
+            self.reload_state()
+        if not self.state.wayland_display:
+            return {"error": "no wayland_display available", "sent": 0}
+        env = self._wl_env()
+        cmd = ["wtype"]
+        for i, shortcut in enumerate(shortcuts):
+            if i and delay_ms > 0:
+                cmd.extend(["-s", str(delay_ms)])
+            cmd.extend(self._wtype_combo_args(shortcut))
+        log.debug("wtype cmd=%s", cmd)
+        total_delay = delay_ms * len(shortcuts) / 1000.0
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True,
+                                timeout=10 + total_delay)
+        if result.returncode != 0:
+            return {"error": f"wtype failed: {result.stderr.strip()}", "sent": 0}
+        return {"ok": True, "sent": len(shortcuts)}
 
     def _wl_type(self, text: str, delay_ms: int = 12) -> dict:
         """Type text via wtype."""
@@ -762,34 +811,47 @@ class CompositorServer:
 
     # ── wbox-pointer (Wayland virtual pointer) ─────────────────────
 
-    def _vptr_cmd(self) -> list[str]:
-        """Build base command for wbox-pointer.py."""
-        tool = Path(__file__).resolve().parent.parent.parent.parent / "tools" / "wbox-pointer" / "wbox-pointer.py"
-        return [sys.executable, str(tool)]
+    def _vptr_client(self):
+        """Get (or lazily create) the persistent virtual-pointer connection."""
+        if self._vptr is None:
+            from wbox.pointer import WaylandClient
+            w, h = self.screen.split("x")
+            wl = WaylandClient(forced_size=(int(w), int(h)))
+            wl.setup(self.state.wayland_display)
+            self._vptr = wl
+        return self._vptr
 
-    def _vptr_env(self) -> dict:
-        env = os.environ.copy()
-        env["WAYLAND_DISPLAY"] = self.state.wayland_display
-        env["WBOX_SCREEN"] = self.screen
-        return env
+    def _vptr_close(self) -> None:
+        if self._vptr is not None:
+            try:
+                self._vptr.disconnect()
+            except OSError:
+                pass
+            self._vptr = None
+
+    def _vptr_op(self, op: str, *args) -> dict:
+        """Run a wbox-pointer operation, reconnecting once on a dead connection."""
+        if not self.state.wayland_display:
+            self.reload_state()
+        if not self.state.wayland_display:
+            return {"error": "no wayland_display available"}
+        for attempt in (1, 2):
+            try:
+                getattr(self._vptr_client(), op)(*args)
+                return {"ok": True}
+            except (OSError, EOFError, RuntimeError, ValueError) as exc:
+                self._vptr_close()
+                if attempt == 2:
+                    return {"error": f"wbox-pointer {op} failed: {exc}"}
+        return {"error": f"wbox-pointer {op} failed"}
 
     def _vptr_move(self, x: int, y: int) -> dict:
         """Move mouse via wbox-pointer (Wayland virtual pointer)."""
-        cmd = self._vptr_cmd() + ["move", str(x), str(y)]
-        result = subprocess.run(cmd, env=self._vptr_env(),
-                                capture_output=True, text=True, timeout=5)
-        if result.returncode != 0:
-            return {"error": f"wbox-pointer move failed: {result.stderr.strip()}"}
-        return {"ok": True}
+        return self._vptr_op("move", x, y)
 
     def _vptr_click(self, x: int, y: int, button: int = 1) -> dict:
         """Click via wbox-pointer (Wayland virtual pointer)."""
-        cmd = self._vptr_cmd() + ["click", str(x), str(y), str(button)]
-        result = subprocess.run(cmd, env=self._vptr_env(),
-                                capture_output=True, text=True, timeout=5)
-        if result.returncode != 0:
-            return {"error": f"wbox-pointer click failed: {result.stderr.strip()}"}
-        return {"ok": True}
+        return self._vptr_op("click", x, y, button)
 
     # ── Input debugging ────────────────────────────────────────────
 
