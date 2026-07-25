@@ -125,6 +125,8 @@ class CompositorServer:
         self._last_mouse_y: int = 0
         # Persistent wbox-pointer Wayland connection (lazy, see _vptr_client)
         self._vptr = None
+        # Long-lived wl-copy owning the Wayland selection (see clipboard_write)
+        self._clip_owner: subprocess.Popen | None = None
         # Last app command/env, kept for restart (separate-app backends)
         self._last_app_cmd: list[str] = []
         self._last_app_env: dict[str, str] = {}
@@ -542,6 +544,7 @@ class CompositorServer:
     def _teardown(self) -> None:
         """Extra cleanup shared by stop() and kill(). Subclasses extend this."""
         self._vptr_close()
+        self._stop_clipboard_owner()
 
     def is_running(self) -> bool:
         if self.state.compositor_proc is not None:
@@ -724,6 +727,52 @@ class CompositorServer:
             return {"error": f"clipboard read failed: {result.stderr.strip()}"}
         return {"text": result.stdout}
 
+    def _wl_clipboard_write(self, text: str, env: dict[str, str]) -> dict:
+        """Own the Wayland selection with a long-lived wl-copy.
+
+        Wayland has no clipboard storage: the source client must stay alive to
+        serve every paste request. wl-copy is therefore left running and only
+        replaced by the next write (or dropped at teardown) — never waited on.
+
+        --foreground keeps it as our direct child so we can end it later; left
+        to fork it would detach and leak one daemon per write. Its output goes
+        to DEVNULL because a forked child inherits the pipes and holds them
+        open, which reads as a hang to any capturing caller.
+        """
+        self._stop_clipboard_owner()
+        try:
+            proc = subprocess.Popen(
+                ["wl-copy", "--foreground", "--", text],
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            return {"error": f"wl-copy failed to start: {exc}"}
+        self._clip_owner = proc
+
+        # No return code to trust — a live wl-copy is the success signal, and
+        # an early exit means it could not take the selection.
+        if not self._poll_until(lambda: proc.poll() is not None, timeout=0.5):
+            return {"ok": True, "length": len(text)}
+        self._clip_owner = None
+        return {"error": f"wl-copy exited immediately (rc={proc.returncode})"}
+
+    def _stop_clipboard_owner(self) -> None:
+        """Drop the wl-copy currently owning the selection, if any."""
+        proc = getattr(self, "_clip_owner", None)
+        if proc is None:
+            return
+        self._clip_owner = None
+        if proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
     def clipboard_write(self, text: str) -> dict:
         """Write text to the clipboard."""
         if not self.is_running():
@@ -734,12 +783,8 @@ class CompositorServer:
 
         if self.input_backends["clipboard"] == "wayland":
             if shutil.which("wl-copy"):
-                cmd = ["wl-copy", "--paste-once", "--"]
-                result = self._run_cmd(cmd + [text], env=env, timeout=5)
-                if result.returncode != 0:
-                    return {"error": f"wl-copy failed: {result.stderr.strip()}"}
-            else:
-                return {"error": "wl-copy not found — install wl-clipboard"}
+                return self._wl_clipboard_write(text, env)
+            return {"error": "wl-copy not found — install wl-clipboard"}
         else:
             if shutil.which("xsel"):
                 cmd = ["xsel", "--clipboard", "--input"]

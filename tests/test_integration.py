@@ -555,16 +555,30 @@ class TestClipboard:
     """Verify clipboard roundtrip."""
 
     def test_clipboard_write_read(self, harness):
+        # Skipping on error used to hide a real bug (#1538): a write that
+        # reported failure had in fact succeeded, and a "successful" one left
+        # nothing to read. Both backends must now work — assert, don't skip.
         test_text = f"wbox_test_{int(time.time())}"
         w = harness.comp.clipboard_write(test_text)
-        if "error" in w:
-            pytest.skip(f"clipboard_write not supported: {w['error']}")
+        assert "error" not in w, f"clipboard_write failed: {w}"
         time.sleep(0.3)
         r = harness.comp.clipboard_read()
-        if "error" in r:
-            pytest.skip(f"clipboard_read not supported: {r['error']}")
+        assert "error" not in r, f"clipboard_read failed: {r}"
         assert r.get("text", "").strip() == test_text, (
             f"clipboard roundtrip: wrote {test_text!r}, read {r!r}"
+        )
+
+    def test_clipboard_overwrite(self, harness):
+        """A second write must replace the first, not leave a stale owner."""
+        first = f"wbox_first_{int(time.time())}"
+        second = f"wbox_second_{int(time.time())}"
+        assert "error" not in harness.comp.clipboard_write(first)
+        time.sleep(0.2)
+        assert "error" not in harness.comp.clipboard_write(second)
+        time.sleep(0.3)
+        r = harness.comp.clipboard_read()
+        assert r.get("text", "").strip() == second, (
+            f"overwrite: expected {second!r}, read {r!r}"
         )
 
 
