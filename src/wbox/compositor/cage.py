@@ -24,8 +24,8 @@ class CageCompositor(CompositorServer):
 
     def __init__(self, *, screen: str = "1280x800", instance_name: str = "",
                  timeouts: dict | None = None, input_backend: str | dict = "x11",
-                 undecorate: bool = True):
-        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend, undecorate=undecorate)
+                 undecorate: bool = True, keyboard_layout: str = ""):
+        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend, undecorate=undecorate, keyboard_layout=keyboard_layout)
         self._log_file: Path | None = None
 
     def set_log_dir(self, log_dir: Path) -> None:
@@ -53,6 +53,7 @@ class CageCompositor(CompositorServer):
         cage_cmd.extend(inner)
 
         log.info("Launching cage: %s", " ".join(cage_cmd))
+        env = self._compositor_env()
 
         # Capture stderr to log file for debugging. An unread PIPE would fill
         # up and block the compositor — without a log file, discard instead.
@@ -65,10 +66,12 @@ class CageCompositor(CompositorServer):
                     cage_cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=stderr_target,
+                    env=env,
                 )
         else:
             self.state.compositor_proc = subprocess.Popen(
                 cage_cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=env,
             )

@@ -107,13 +107,14 @@ class CompositorServer:
 
     def __init__(self, *, screen: str = "1280x800", instance_name: str = "",
                  timeouts: dict | None = None, input_backend: str | dict = "x11",
-                 undecorate: bool = True):
+                 undecorate: bool = True, keyboard_layout: str = ""):
         from wbox.config import resolve_input_backend
         self.screen = screen
         self.instance_name = instance_name
         self.timeouts = timeouts or {}
         self.input_backends = resolve_input_backend(input_backend)
         self.undecorate = undecorate
+        self.keyboard_layout = keyboard_layout
         # Use instance name for state file if available, else compositor name
         state_id = instance_name or self.compositor_name
         self._state_file = Path(tempfile.gettempdir()) / f"wbox_{state_id}_state.json"
@@ -125,6 +126,21 @@ class CompositorServer:
         # Last app command/env, kept for restart (separate-app backends)
         self._last_app_cmd: list[str] = []
         self._last_app_env: dict[str, str] = {}
+
+    def _compositor_env(self) -> dict[str, str]:
+        """Environment for the compositor process.
+
+        When keyboard_layout is set, force the XKB layout (and drop any host
+        variant/options) so the nested seat keymap is deterministic — input
+        injection and the app must agree on a keymap regardless of the host
+        layout (e.g. AZERTY hosts).
+        """
+        env = os.environ.copy()
+        if self.keyboard_layout:
+            env["XKB_DEFAULT_LAYOUT"] = self.keyboard_layout
+            env.pop("XKB_DEFAULT_VARIANT", None)
+            env.pop("XKB_DEFAULT_OPTIONS", None)
+        return env
 
     @staticmethod
     def _run_cmd(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -280,6 +296,7 @@ class CompositorServer:
                 "pid": self.state.compositor_proc.pid if self.state.compositor_proc else 0,
             }
         self.state.x_display = x_display
+        self._force_xwayland_layout()
 
         # Hook for post-compositor setup (e.g. resize nested window)
         self._post_compositor_start()
@@ -524,6 +541,8 @@ class CompositorServer:
     def type_text(self, text: str, delay_ms: int = 12) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
+        if self.input_backends["keyboard"] == "wbox-keyboard":
+            return self._vptr_op("type_text", text, delay_ms)
         if self.input_backends["keyboard"] == "wtype":
             return self._wl_type(text, delay_ms)
         self._focus_active_window()
@@ -532,6 +551,8 @@ class CompositorServer:
     def key(self, shortcut: str) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
+        if self.input_backends["keyboard"] == "wbox-keyboard":
+            return self._vptr_op("key_combo", shortcut)
         if self.input_backends["keyboard"] == "wtype":
             return self._wl_key(shortcut)
         self._focus_active_window()
@@ -544,6 +565,11 @@ class CompositorServer:
         if not shortcuts:
             return {"ok": True, "sent": 0}
         delay_ms = max(delay_ms, 0)
+        if self.input_backends["keyboard"] == "wbox-keyboard":
+            result = self._vptr_op("key_combos", shortcuts, delay_ms)
+            if "error" in result:
+                return {"error": result["error"], "sent": 0}
+            return {"ok": True, "sent": len(shortcuts)}
         if self.input_backends["keyboard"] == "wtype":
             return self._wl_keys(shortcuts, delay_ms)
         # x11: focus once, then one xdotool spawn for the whole sequence
@@ -732,6 +758,31 @@ class CompositorServer:
                 env=env, timeout=5, text=False,
             )
         log.info("Undecorated X11 windows on %s", self.state.x_display)
+
+    def _force_xwayland_layout(self) -> None:
+        """Align the nested Xwayland core keymap with keyboard_layout.
+
+        Xwayland starts with the system default layout and only adopts the
+        compositor's seat keymap when an X client gains keyboard focus — which
+        never happens when the app is a Wayland client. xdotool computes
+        keycodes from the Xwayland keymap while the compositor delivers them
+        through the seat keymap, so a mismatch garbles typed text. Best-effort.
+        """
+        if not (self.keyboard_layout and self.state.x_display):
+            return
+        if not shutil.which("setxkbmap"):
+            log.warning("setxkbmap not found — cannot pin Xwayland layout %r",
+                        self.keyboard_layout)
+            return
+        env = os.environ.copy()
+        env["DISPLAY"] = self.state.x_display
+        result = self._run_cmd(
+            ["setxkbmap", "-display", self.state.x_display, self.keyboard_layout],
+            env=env, timeout=5,
+        )
+        if result.returncode != 0:
+            log.warning("setxkbmap %s failed on %s: %s", self.keyboard_layout,
+                        self.state.x_display, result.stderr.strip())
 
     def _focus_active_window(self) -> None:
         """Force X11 focus on the active window.

@@ -45,6 +45,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
     timeouts = cfg.get("timeouts", {})
     input_backend = cfg.get("input_backend", "hybrid")
     undecorate = cfg.get("undecorate", True)
+    keyboard_layout = cfg.get("keyboard_layout", "")
 
     if backend == "win32":
         from .compositor.win32 import Win32Compositor
@@ -64,6 +65,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
             timeouts=timeouts,
             input_backend=input_backend,
             undecorate=undecorate,
+            keyboard_layout=keyboard_layout,
         )
     elif backend == "labwc":
         from .compositor.labwc import LabwcCompositor
@@ -73,7 +75,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
             timeouts=timeouts,
             input_backend=input_backend,
             undecorate=undecorate,
-            keyboard_layout=cfg.get("keyboard_layout", ""),
+            keyboard_layout=keyboard_layout,
         )
         return comp
     else:
@@ -84,6 +86,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
             timeouts=timeouts,
             input_backend=input_backend,
             undecorate=undecorate,
+            keyboard_layout=keyboard_layout,
         )
 
 

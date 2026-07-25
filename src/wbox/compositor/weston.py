@@ -32,8 +32,8 @@ class WestonCompositor(CompositorServer):
     def __init__(self, *, screen: str = "1280x800", shell: str = "kiosk",
                  backend: str = "wayland", instance_name: str = "",
                  timeouts: dict | None = None, input_backend: str | dict = "x11",
-                 undecorate: bool = True):
-        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend, undecorate=undecorate)
+                 undecorate: bool = True, keyboard_layout: str = ""):
+        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend, undecorate=undecorate, keyboard_layout=keyboard_layout)
         self.shell = shell
         self.backend = backend
         # Deterministic wayland socket name
@@ -53,6 +53,13 @@ class WestonCompositor(CompositorServer):
             f"shell={shell_so}",
             "",
         ]
+
+        if self.keyboard_layout:
+            lines.extend([
+                "[keyboard]",
+                f"keymap_layout={self.keyboard_layout}",
+                "",
+            ])
 
         if self.shell == "desktop":
             lines.extend([
@@ -99,6 +106,7 @@ class WestonCompositor(CompositorServer):
             weston_cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=self._compositor_env(),
         )
 
     def _start_app(

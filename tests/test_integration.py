@@ -139,6 +139,9 @@ class WboxTestHarness:
             "screen": self.screen,
             "input_backend": self.input_backend,
             "undecorate": self.undecorate,
+            # Pin the nested seat keymap: the host may run any layout (e.g.
+            # AZERTY) and input injection assumes us keycodes
+            "keyboard_layout": "us",
             "timeouts": {
                 "wayland_display": 10,
                 "xwayland_display": 15,

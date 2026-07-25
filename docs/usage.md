@@ -173,7 +173,11 @@ compositor: labwc          # labwc (default), weston, or cage
 screen: "1280x800"
 input_backend: hybrid      # hybrid (default), x11, wayland, or per-function dict
 undecorate: true           # remove server-side window decorations (default: true)
-keyboard_layout: ""        # XKB layout (e.g. fr, us, de). Empty = inherit from host
+keyboard_layout: ""        # XKB layout forced on the nested seat AND its
+                           # Xwayland (all compositors). Empty = inherit from
+                           # host. Set "us" for reliable input injection: the
+                           # wbox-keyboard backend sends us-position keycodes,
+                           # and xdotool needs Xwayland and the seat to agree
 
 log:
   dir: ./log
@@ -198,9 +202,14 @@ app:
 
 # Per-function input backend override
 # input_backend:
-#   keyboard: wtype        # wtype or xdotool
-#   mouse: wbox-pointer    # wbox-pointer, xdotool, or ydotool
-#   clipboard: x11         # x11 or wayland
+#   keyboard: wbox-keyboard  # wbox-keyboard, wtype, or xdotool
+#   mouse: wbox-pointer      # wbox-pointer, xdotool, or ydotool
+#   clipboard: x11           # x11 or wayland
+#
+# wbox-keyboard (default in the hybrid/wayland presets) is a built-in Wayland
+# virtual keyboard sending US-layout keycodes; it works on wlroots compositors
+# (labwc, cage) which force the seat keymap onto every keyboard and thereby
+# break wtype's embedded keymap. Pair it with keyboard_layout: us.
 
 tools:
   deploy:
@@ -246,21 +255,21 @@ See also [`examples/config.sample.yaml`](../examples/config.sample.yaml) for a c
 
 System dependencies are installed automatically by `setup.sh`.
 
-**Required:** `labwc`, `grim`, `xdotool`, `wtype`, `wlr-randr`, `wlrctl`, `python3`, `uv`, `git`
+**Required:** `labwc`, `grim`, `xdotool`, `setxkbmap`, `wlr-randr`, `wlrctl`, `python3`, `uv`, `git`
 
-**Optional:** `weston`, `cage`, `weston-screenshooter`, `xclip`/`xsel`, `wl-clipboard`, `ydotool`
+**Optional:** `weston`, `cage`, `weston-screenshooter`, `xclip`/`xsel`, `wl-clipboard`, `ydotool`, `wtype`
 
 Manual install:
 
 ```bash
 # Fedora
-sudo dnf install labwc grim xdotool wtype wlr-randr wlrctl wl-clipboard xclip
+sudo dnf install labwc grim xdotool setxkbmap wlr-randr wlrctl wl-clipboard xclip
 
 # Ubuntu/Debian
-sudo apt install labwc grim xdotool wtype wlr-randr wlrctl wl-clipboard xclip
+sudo apt install labwc grim xdotool x11-xkb-utils wlr-randr wlrctl wl-clipboard xclip
 
 # Arch
-sudo pacman -S labwc grim xdotool wtype wlr-randr wlrctl wl-clipboard xclip
+sudo pacman -S labwc grim xdotool xorg-setxkbmap wlr-randr wlrctl wl-clipboard xclip
 ```
 
 ### Windows

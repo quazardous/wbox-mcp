@@ -93,6 +93,7 @@ DEPS_MAP=(
     "xclip:xclip:xclip:xclip"
     "xsel:xsel:xsel:xsel"
     "wtype:wtype:wtype:wtype"
+    "setxkbmap:setxkbmap:x11-xkb-utils:xorg-setxkbmap"
     "ydotool:ydotool:ydotool:ydotool"
     "wl-copy:wl-clipboard:wl-clipboard:wl-clipboard"
     "labwc:labwc:labwc:labwc"
@@ -128,8 +129,8 @@ install_pkgs() {
 
 # ── Runtime dependencies ───────────────────────────────────────────
 
-REQUIRED_BINS=(labwc grim xdotool wtype wlr-randr wlrctl)
-OPTIONAL_BINS=(weston cage weston-screenshooter xev xclip xsel ydotool wl-copy)
+REQUIRED_BINS=(labwc grim xdotool setxkbmap wlr-randr wlrctl)
+OPTIONAL_BINS=(weston cage weston-screenshooter xev xclip xsel ydotool wl-copy wtype)
 
 MISSING_REQUIRED=()
 MISSING_OPTIONAL=()

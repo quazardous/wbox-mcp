@@ -32,8 +32,7 @@ class LabwcCompositor(CompositorServer):
     def __init__(self, *, screen: str = "1280x800", instance_name: str = "",
                  timeouts: dict | None = None, input_backend: str | dict = "x11",
                  undecorate: bool = True, keyboard_layout: str = ""):
-        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend, undecorate=undecorate)
-        self.keyboard_layout = keyboard_layout
+        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend, undecorate=undecorate, keyboard_layout=keyboard_layout)
         # labwc doesn't support deterministic socket naming — use diff-based detection
         self.wayland_socket_name = ""
         self._config_dir: Path | None = None
@@ -78,14 +77,11 @@ class LabwcCompositor(CompositorServer):
         config_dir = self._write_config()
 
         w, h = self.screen.split("x")
-        env = os.environ.copy()
+        env = self._compositor_env()
         env["WLR_BACKENDS"] = "wayland"
         env["LABWC_CONFIG_DIR"] = str(config_dir)
         # wlroots: set initial window size
         env["WLR_WL_OUTPUTS"] = "1"
-        # Keyboard layout (XKB)
-        if self.keyboard_layout:
-            env["XKB_DEFAULT_LAYOUT"] = self.keyboard_layout
 
         labwc_cmd = [
             "labwc",

@@ -16,12 +16,12 @@ _IS_WIN32 = sys.platform == "win32"
 
 INPUT_BACKEND_PRESETS = {
     "x11": {"keyboard": "xdotool", "mouse": "xdotool", "clipboard": "x11"},
-    "wayland": {"keyboard": "wtype", "mouse": "ydotool", "clipboard": "wayland"},
-    "hybrid": {"keyboard": "wtype", "mouse": "wbox-pointer", "clipboard": "x11"},
+    "wayland": {"keyboard": "wbox-keyboard", "mouse": "ydotool", "clipboard": "wayland"},
+    "hybrid": {"keyboard": "wbox-keyboard", "mouse": "wbox-pointer", "clipboard": "x11"},
 }
 
 _VALID_BACKENDS = {
-    "keyboard": ("xdotool", "wtype"),
+    "keyboard": ("xdotool", "wtype", "wbox-keyboard"),
     "mouse": ("xdotool", "ydotool", "wbox-pointer"),
     "clipboard": ("x11", "wayland"),
 }
