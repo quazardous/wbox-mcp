@@ -39,6 +39,18 @@ screen: "1280x800"
 #
 headless: false
 
+# ── Clipboard bridge (labwc only) ──────────────────────────────────
+#
+# labwc keeps the sandbox clipboard in sync with your desktop, both
+# ways, so you can copy-paste between them.
+#
+# SECURITY: while enabled, the sandboxed app can read everything you
+# copy on your desktop — passwords included. Set it to false to keep
+# the sandbox clipboard isolated; clipboard_read/clipboard_write keep
+# working, they just no longer reach your desktop.
+#
+clipboard_bridge: true
+
 # ── Weston-specific options (ignored by labwc/cage) ────────────────
 #
 # weston_shell: kiosk or desktop

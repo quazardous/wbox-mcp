@@ -148,6 +148,10 @@ class WboxTestHarness:
             # Run offscreen so the suite doesn't pop windows over the desktop.
             # Set WBOX_TEST_VISIBLE=1 to watch what the tests are doing.
             "headless": HEADLESS,
+            # The bridge would propagate every clipboard test to the real
+            # desktop clipboard. The tests assert on the nested clipboard,
+            # so turning it off costs no coverage.
+            "clipboard_bridge": False,
             "timeouts": {
                 "wayland_display": 10,
                 "xwayland_display": 15,

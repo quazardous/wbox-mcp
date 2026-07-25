@@ -32,8 +32,9 @@ class LabwcCompositor(CompositorServer):
     def __init__(self, *, screen: str = "1280x800", instance_name: str = "",
                  timeouts: dict | None = None, input_backend: str | dict = "x11",
                  undecorate: bool = True, keyboard_layout: str = "",
-                 headless: bool = False):
+                 headless: bool = False, clipboard_bridge: bool = True):
         super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend, undecorate=undecorate, keyboard_layout=keyboard_layout, headless=headless)
+        self.clipboard_bridge = clipboard_bridge
         # labwc doesn't support deterministic socket naming — use diff-based detection
         self.wayland_socket_name = ""
         self._config_dir: Path | None = None
@@ -124,6 +125,9 @@ class LabwcCompositor(CompositorServer):
 
     def _start_clipboard_bridge(self) -> None:
         """Start bidirectional clipboard sync between nested labwc and host."""
+        if not self.clipboard_bridge:
+            log.info("Clipboard bridge: disabled by config")
+            return
         host_wl = os.environ.get("WAYLAND_DISPLAY", "")
         nested_wl = self.state.wayland_display
         if not host_wl or not nested_wl:

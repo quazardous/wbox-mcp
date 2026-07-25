@@ -48,6 +48,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
     keyboard_layout = cfg.get("keyboard_layout", "")
     # "quiet" is accepted as an alias — it is how the feature was requested
     headless = bool(cfg.get("headless", cfg.get("quiet", False)))
+    clipboard_bridge = bool(cfg.get("clipboard_bridge", True))
 
     if backend == "win32":
         from .compositor.win32 import Win32Compositor
@@ -80,6 +81,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
             undecorate=undecorate,
             keyboard_layout=keyboard_layout,
             headless=headless,
+            clipboard_bridge=clipboard_bridge,
         )
         return comp
     else:
