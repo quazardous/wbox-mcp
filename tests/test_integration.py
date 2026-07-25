@@ -352,22 +352,67 @@ def _fresh_log_view(request):
     yield
 
 
+@pytest.fixture(scope="class")
+def sanity_display():
+    """DISPLAY for the standalone crash_dummy tests.
+
+    These run outside any wbox compositor on purpose — that is how they tell
+    a crash_dummy bug from a wbox bug — so they cannot use headless mode and
+    would pop windows onto the user's desktop. Xvfb gives them an offscreen
+    X server instead. Falls back to the host display when Xvfb is missing, so
+    the suite still runs on a machine without the package.
+    """
+    host = os.environ.get("DISPLAY", "")
+    if not HEADLESS or not shutil.which("Xvfb"):
+        yield host
+        return
+
+    proc = None
+    for num in range(99, 110):
+        candidate = subprocess.Popen(
+            ["Xvfb", f":{num}", "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        # Xvfb exits on its own when the display number is taken
+        socket_path = Path("/tmp/.X11-unix") / f"X{num}"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if candidate.poll() is not None:
+                break
+            if socket_path.exists():
+                proc = candidate
+                break
+            time.sleep(0.1)
+        if proc is not None:
+            break
+        if candidate.poll() is None:
+            _stop_proc(candidate)
+
+    if proc is None:
+        yield host
+        return
+    try:
+        yield f":{num}"
+    finally:
+        _stop_proc(proc)
+
+
 # ── Tests ────────────────────────────────────────────────────────────
 
 class TestCrashDummySanity:
     """Verify crash_dummy.py works standalone (no wbox)."""
 
-    def test_crash_dummy_starts_on_host(self):
-        """Launch crash_dummy on host DISPLAY, verify it logs 'ready'."""
-        display = os.environ.get("DISPLAY")
-        if not display:
-            pytest.skip("no host DISPLAY")
+    def test_crash_dummy_starts_on_host(self, sanity_display):
+        """Launch crash_dummy standalone, verify it logs 'ready'."""
+        if not sanity_display:
+            pytest.skip("no DISPLAY available")
         log_path = CRASH_DUMMY_DIR / "log" / "sanity_test.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if log_path.exists():
             log_path.unlink()
 
         env = os.environ.copy()
+        env["DISPLAY"] = sanity_display
         env["CRASH_DUMMY_LOG"] = str(log_path)
         env["CRASH_DUMMY_MODE"] = "normal"
         env["CRASH_DUMMY_SIZE"] = "400x300"
@@ -394,17 +439,17 @@ class TestCrashDummySanity:
         finally:
             _stop_proc(proc)
 
-    def test_crash_dummy_fixed_mode(self):
+    def test_crash_dummy_fixed_mode(self, sanity_display):
         """Launch crash_dummy in fixed mode, verify non-resizable."""
-        display = os.environ.get("DISPLAY")
-        if not display:
-            pytest.skip("no host DISPLAY")
+        if not sanity_display:
+            pytest.skip("no DISPLAY available")
         log_path = CRASH_DUMMY_DIR / "log" / "sanity_fixed.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if log_path.exists():
             log_path.unlink()
 
         env = os.environ.copy()
+        env["DISPLAY"] = sanity_display
         env["CRASH_DUMMY_LOG"] = str(log_path)
         env["CRASH_DUMMY_MODE"] = "fixed"
         env["CRASH_DUMMY_SIZE"] = "400x300"
@@ -425,11 +470,10 @@ class TestCrashDummySanity:
         finally:
             _stop_proc(proc)
 
-    def test_crash_dummy_popup_signal(self):
+    def test_crash_dummy_popup_signal(self, sanity_display):
         """Launch crash_dummy, send open_popup via FIFO, verify popup opens."""
-        display = os.environ.get("DISPLAY")
-        if not display:
-            pytest.skip("no host DISPLAY")
+        if not sanity_display:
+            pytest.skip("no DISPLAY available")
         log_path = CRASH_DUMMY_DIR / "log" / "sanity_popup.log"
         fifo_path = CRASH_DUMMY_DIR / "log" / "sanity_popup.fifo"
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -437,6 +481,7 @@ class TestCrashDummySanity:
             log_path.unlink()
 
         env = os.environ.copy()
+        env["DISPLAY"] = sanity_display
         env["CRASH_DUMMY_LOG"] = str(log_path)
         env["CRASH_DUMMY_FIFO"] = str(fifo_path)
         env["CRASH_DUMMY_MODE"] = "normal"
