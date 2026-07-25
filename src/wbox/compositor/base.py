@@ -378,13 +378,20 @@ class CompositorServer:
         )
         self.state.save(self._state_file)
 
-        # The first pointer event after launch lands at an arbitrary position:
-        # the nested compositor has no pointer position established yet, so the
-        # warp is swallowed and the button press is delivered wherever the
-        # cursor happened to be. Warm the pointer up so the first real click
-        # hits its target (and, for wbox-pointer, opens the connection early).
-        # Aim at the center: it is inside the app surface in every app mode,
-        # so the app also gets its pointer-enter before the first real click.
+        # Events sent to a freshly created device are swallowed while the
+        # compositor still propagates it to clients — create the virtual
+        # pointer and keyboard now, so the first real click or keystroke
+        # isn't the one that gets lost.
+        if "wbox-pointer" in self.input_backends.values() or \
+                "wbox-keyboard" in self.input_backends.values():
+            self._vptr_op("warm_up")
+
+        # Likewise the first pointer event after launch lands at an arbitrary
+        # position: the nested compositor has no pointer position established
+        # yet, so the warp is swallowed and the button press is delivered
+        # wherever the cursor happened to be. Aim at the center: it is inside
+        # the app surface in every app mode, so the app also gets its
+        # pointer-enter before the first real click.
         try:
             w, h = (int(v) for v in self.screen.split("x"))
             self.mouse_move(w // 2, h // 2)

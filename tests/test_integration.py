@@ -147,8 +147,7 @@ class WboxTestHarness:
             "keyboard_layout": "us",
             # Run offscreen so the suite doesn't pop windows over the desktop.
             # Set WBOX_TEST_VISIBLE=1 to watch what the tests are doing.
-            # weston has no usable headless mode (its screenshooter hangs).
-            "headless": HEADLESS and self.compositor != "weston",
+            "headless": HEADLESS,
             "timeouts": {
                 "wayland_display": 10,
                 "xwayland_display": 15,

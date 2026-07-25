@@ -30,8 +30,10 @@ screen: "1280x800"
 # the host desktop, while screenshots, clicks and keyboard injection all
 # keep working normally. Useful for test suites and unattended runs.
 #
-# labwc and cage only — weston starts headless but its screenshooter
-# then hangs, so wbox refuses the combination with a clear error.
+# Works with all three compositors. labwc and cage use the wlroots
+# headless backend; weston uses its own, forced onto the pixman software
+# renderer (its default noop renderer draws nothing, which would leave
+# screenshots hanging forever) — so weston headless is a bit slower.
 #
 # "quiet" is accepted as an alias for the same option.
 #

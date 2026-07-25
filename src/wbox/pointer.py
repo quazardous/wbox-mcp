@@ -502,6 +502,20 @@ class WaylandClient:
             os.close(fd)
         self.roundtrip()
 
+    def warm_up(self):
+        """Create the virtual devices ahead of the first real event.
+
+        A freshly created virtual device swallows whatever is sent right
+        after it — the compositor is still propagating the device (and, for
+        the keyboard, its keymap) to clients. Creating them up front keeps
+        the first genuine click or keystroke from being lost.
+        """
+        if self._vptr_mgr_id:
+            self._ensure_vptr()
+        if self._vkbd_mgr_id:
+            self._ensure_vkbd()
+        self.roundtrip()
+
     def _kbd_key(self, code, state):
         # zwp_virtual_keyboard_v1.key (opcode 1): time(u), key(u), state(u)
         self._send(self._vkbd_id, 1,

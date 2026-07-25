@@ -82,14 +82,6 @@ class WestonCompositor(CompositorServer):
         wl_before: set[Path],
         x11_before: set[Path],
     ) -> None:
-        if self.headless:
-            # weston does start on its headless backend, but
-            # weston-screenshooter then hangs on it — no screenshots at all
-            raise RuntimeError(
-                "headless is not supported by the weston backend "
-                "(weston-screenshooter hangs on headless outputs) — "
-                "use the labwc or cage compositor instead"
-            )
         for tool in ("weston", "xdotool"):
             if not shutil.which(tool):
                 raise RuntimeError(f"'{tool}' not found in PATH")
@@ -99,15 +91,21 @@ class WestonCompositor(CompositorServer):
         self._ini_path = self._write_ini()
 
         w, h = self.screen.split("x")
+        backend = "headless" if self.headless else self.backend
         weston_cmd = [
             "weston",
-            "-B", self.backend,
+            "-B", backend,
             f"--config={self._ini_path}",
             f"--width={w}",
             f"--height={h}",
             f"-S", self.wayland_socket_name,
             "--debug",
         ]
+        if self.headless:
+            # The headless backend defaults to the noop renderer, which draws
+            # nothing: weston-screenshooter then waits forever on a capture
+            # source the compositor never answers (not even with `failed`).
+            weston_cmd.insert(1, "--renderer=pixman")
 
         log.info("Launching weston: %s", " ".join(weston_cmd))
 

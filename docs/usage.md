@@ -35,7 +35,7 @@ wbox-mcp --version                # Show version
 | `--weston-backend TYPE` | `wayland` or `x11` (Linux only) |
 | `--weston-shell TYPE` | `kiosk` or `desktop` (Linux only) |
 | `--input-backend PRESET` | `hybrid`, `x11`, or `wayland` (Linux only) |
-| `--headless` | Run offscreen, no window on the host desktop (labwc/cage) |
+| `--headless` | Run offscreen, no window on the host desktop |
 | `--title-hint TEXT` | Window title substring to match (Windows only) |
 | `--app-command CMD` | App command to launch |
 | `--app-env KEY=VALUE` | Environment variable (repeatable) |
@@ -175,9 +175,9 @@ screen: "1280x800"
 input_backend: hybrid      # hybrid (default), x11, wayland, or per-function dict
 undecorate: true           # remove server-side window decorations (default: true)
 headless: false            # run offscreen — no window on the host desktop.
-                           # labwc/cage only (weston's screenshooter hangs on
-                           # headless outputs). Screenshots, clicks and keys
-                           # all keep working. Alias: quiet
+                           # Screenshots, clicks and keys all keep working.
+                           # Supported by all three compositors (weston uses
+                           # the pixman software renderer). Alias: quiet
 keyboard_layout: ""        # XKB layout forced on the nested seat AND its
                            # Xwayland (all compositors). Empty = inherit from
                            # host. Set "us" for reliable input injection: the
