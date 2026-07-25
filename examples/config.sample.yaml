@@ -49,9 +49,9 @@ screen: "1280x800"
 #             Requires wlroots compositor (labwc, cage).
 #   x11     — xdotool for everything + xclip/xsel clipboard.
 #             Works with all compositors. Needs Xwayland.
-#   wayland — wbox-keyboard + ydotool mouse + wl-clipboard.
-#             WARNING: ydotool uses /dev/uinput and WILL move the
-#             user's real mouse on the host. Not recommended.
+#   wayland — wbox-keyboard + wbox-pointer + wl-clipboard.
+#             Fully Wayland-native, no X11 tooling needed.
+#             Requires wlroots compositor (labwc, cage).
 #
 # Custom (dict) — mix and match per function:
 #   keyboard:  xdotool | wtype | wbox-keyboard

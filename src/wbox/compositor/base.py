@@ -181,6 +181,28 @@ class CompositorServer:
         """Hook called after compositor and Xwayland are ready, before app launch."""
         pass
 
+    def _apply_screen_size(self) -> None:
+        """Set the nested output resolution via wlr-randr (wlroots only).
+
+        Some compositors ignore the requested size at startup (cage has no
+        size option at all) — force the output mode to match self.screen so
+        coordinates, screenshots, and get_size agree with the config.
+        """
+        if not shutil.which("wlr-randr"):
+            log.warning("wlr-randr not found — cannot set screen size")
+            return
+        env = os.environ.copy()
+        env["WAYLAND_DISPLAY"] = self.state.wayland_display
+        result = self._run_cmd(
+            ["wlr-randr", "--output", "WL-1", "--custom-mode", self.screen],
+            env=env, timeout=5,
+        )
+        if result.returncode == 0:
+            log.info("Set %s output to %s via wlr-randr",
+                     self.compositor_name, self.screen)
+        else:
+            log.warning("wlr-randr failed: %s", result.stderr.strip())
+
     def _post_app_start(self) -> None:
         """Hook called after app has rendered (after app_render wait)."""
         pass
@@ -319,6 +341,19 @@ class CompositorServer:
             self.state.compositor_proc.pid if self.state.compositor_proc else 0
         )
         self.state.save(self._state_file)
+
+        # The first pointer event after launch lands at an arbitrary position:
+        # the nested compositor has no pointer position established yet, so the
+        # warp is swallowed and the button press is delivered wherever the
+        # cursor happened to be. Warm the pointer up so the first real click
+        # hits its target (and, for wbox-pointer, opens the connection early).
+        # Aim at the center: it is inside the app surface in every app mode,
+        # so the app also gets its pointer-enter before the first real click.
+        try:
+            w, h = (int(v) for v in self.screen.split("x"))
+            self.mouse_move(w // 2, h // 2)
+        except ValueError:
+            self.mouse_move(0, 0)
 
         return {
             "status": "running",
@@ -930,11 +965,13 @@ class CompositorServer:
     # ── wbox-pointer (Wayland virtual pointer) ─────────────────────
 
     def _vptr_client(self):
-        """Get (or lazily create) the persistent virtual-pointer connection."""
+        """Get (or lazily create) the persistent virtual-input connection."""
         if self._vptr is None:
             from wbox.pointer import WaylandClient
             w, h = self.screen.split("x")
-            wl = WaylandClient(forced_size=(int(w), int(h)))
+            # fallback only: the real output size (wl_output.mode) is
+            # authoritative — compositors may not honor the configured size
+            wl = WaylandClient(fallback_size=(int(w), int(h)))
             wl.setup(self.state.wayland_display)
             self._vptr = wl
         return self._vptr

@@ -32,6 +32,11 @@ class CageCompositor(CompositorServer):
         """Set directory for cage stderr log capture."""
         self._log_file = log_dir / "cage-compositor.log"
 
+    def _post_compositor_start(self) -> None:
+        """cage has no size option and opens its output at an arbitrary
+        size (e.g. 1280x720) — force it to match the configured screen."""
+        self._apply_screen_size()
+
     def _start_compositor(
         self,
         app_cmd: list[str],

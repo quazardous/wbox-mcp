@@ -185,22 +185,6 @@ class LabwcCompositor(CompositorServer):
                 pass
 
 
-    def _apply_screen_size(self) -> None:
-        """Set the labwc output resolution via wlr-randr."""
-        if not shutil.which("wlr-randr"):
-            log.warning("wlr-randr not found — cannot set screen size")
-            return
-        env = os.environ.copy()
-        env["WAYLAND_DISPLAY"] = self.state.wayland_display
-        result = subprocess.run(
-            ["wlr-randr", "--output", "WL-1", "--custom-mode", self.screen],
-            env=env, capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0:
-            log.info("Set labwc output to %s via wlr-randr", self.screen)
-        else:
-            log.warning("wlr-randr failed: %s", result.stderr.strip())
-
     def get_size(self) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}

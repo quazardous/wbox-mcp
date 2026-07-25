@@ -218,7 +218,8 @@ def _parse_shortcut(shortcut: str) -> tuple[int, int, list[int]]:
 class WaylandClient:
     """Minimal Wayland wire-protocol client (pure Python)."""
 
-    def __init__(self, forced_size: tuple[int, int] | None = None):
+    def __init__(self, forced_size: tuple[int, int] | None = None,
+                 fallback_size: tuple[int, int] | None = None):
         self.sock = None
         self.next_id = 2  # 1 = wl_display
         self.recv_buf = b""
@@ -229,11 +230,17 @@ class WaylandClient:
         self._seat_id = 0
         self._output_id = 0
         self._vptr_mgr_id = 0
+        self._vptr_id = 0
         self._vkbd_mgr_id = 0
         self._vkbd_id = 0
-        # output size; a forced size wins over wl_output.mode auto-detection
+        # Output size for motion_absolute extents. The real output size from
+        # wl_output.mode is authoritative (compositors may ignore the
+        # configured size — cage opens at 1280x720 regardless), and mode
+        # events on later roundtrips track resizes. forced_size wins over
+        # detection (explicit override); fallback_size only seeds the value
+        # until a mode event arrives.
         self._size_forced = forced_size is not None
-        self.screen_w, self.screen_h = forced_size or (0, 0)
+        self.screen_w, self.screen_h = forced_size or fallback_size or (0, 0)
 
     # ── Connection ──
 
@@ -248,6 +255,7 @@ class WaylandClient:
         if self.sock:
             self.sock.close()
             self.sock = None
+        self._vptr_id = 0
         self._vkbd_id = 0
 
     # ── Wire protocol ──
@@ -399,35 +407,40 @@ class WaylandClient:
         if self._output_id:
             self.roundtrip()
 
-    def _require_vptr(self):
+    def _ensure_vptr(self):
+        """Create the virtual pointer (once) and return its object id.
+
+        The pointer is kept alive for the lifetime of the connection: a
+        freshly created virtual pointer is a brand-new input device, and the
+        compositor drops events that arrive before it finishes setting it up
+        — creating one per click loses clicks at random.
+        """
+        if self._vptr_id:
+            return self._vptr_id
         if not self._vptr_mgr_id:
             raise RuntimeError("compositor does not support wlr-virtual-pointer")
-
-    def move(self, x, y):
-        """Create virtual pointer, send absolute motion, destroy."""
-        self._require_vptr()
-        vp = self._alloc()
+        self._vptr_id = self._alloc()
         # zwlr_virtual_pointer_manager_v1.create_virtual_pointer (opcode 0)
         #   args: seat(object), id(new_id)
         self._send(self._vptr_mgr_id, 0,
-                   self._uint(self._seat_id) + self._uint(vp))
+                   self._uint(self._seat_id) + self._uint(self._vptr_id))
+        self.roundtrip()
+        return self._vptr_id
 
-        t = _now_ms()
-
+    def _motion(self, vp, x, y):
         # zwlr_virtual_pointer_v1.motion_absolute (opcode 1)
         #   args: time(u), x(u), y(u), x_extent(u), y_extent(u)
         self._send(vp, 1,
-                   self._uint(t) +
+                   self._uint(_now_ms()) +
                    self._uint(x) + self._uint(y) +
                    self._uint(self.screen_w) + self._uint(self.screen_h))
+        self._send(vp, 4)  # frame
 
-        # frame (opcode 4)
-        self._send(vp, 4)
-
+    def move(self, x, y):
+        """Send absolute pointer motion."""
+        vp = self._ensure_vptr()
+        self._motion(vp, x, y)
         self.roundtrip()
-
-        # destroy (opcode 5)
-        self._send(vp, 5)
         return vp
 
     def click(self, x, y, button=1):
@@ -435,38 +448,23 @@ class WaylandClient:
         btn_map = {1: BTN_LEFT, 2: BTN_MIDDLE, 3: BTN_RIGHT}
         btn = btn_map.get(button, BTN_LEFT)
 
-        self._require_vptr()
-        vp = self._alloc()
-        self._send(self._vptr_mgr_id, 0,
-                   self._uint(self._seat_id) + self._uint(vp))
+        vp = self._ensure_vptr()
+        self._motion(vp, x, y)
 
-        t = _now_ms()
-
-        # motion_absolute
-        self._send(vp, 1,
-                   self._uint(t) +
-                   self._uint(x) + self._uint(y) +
-                   self._uint(self.screen_w) + self._uint(self.screen_h))
-        self._send(vp, 4)  # frame
-
-        # button press
-        t = _now_ms()
+        # button press (opcode 2): time(u), button(u), state(u)
         self._send(vp, 2,
-                   self._uint(t) + self._uint(btn) + self._uint(PRESSED))
+                   self._uint(_now_ms()) + self._uint(btn) + self._uint(PRESSED))
         self._send(vp, 4)  # frame
 
         self.roundtrip()
         time.sleep(0.02)
 
         # button release
-        t = _now_ms()
         self._send(vp, 2,
-                   self._uint(t) + self._uint(btn) + self._uint(RELEASED))
+                   self._uint(_now_ms()) + self._uint(btn) + self._uint(RELEASED))
         self._send(vp, 4)  # frame
 
         self.roundtrip()
-
-        self._send(vp, 5)  # destroy
 
     # ── Virtual keyboard ──
 
