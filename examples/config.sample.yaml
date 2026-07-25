@@ -24,6 +24,19 @@ compositor: labwc
 # Screen size (WxH) — initial size of the nested compositor window.
 screen: "1280x800"
 
+# ── Headless (offscreen) mode ──────────────────────────────────────
+#
+# Run the nested compositor on an offscreen output: nothing appears on
+# the host desktop, while screenshots, clicks and keyboard injection all
+# keep working normally. Useful for test suites and unattended runs.
+#
+# labwc and cage only — weston starts headless but its screenshooter
+# then hangs, so wbox refuses the combination with a clear error.
+#
+# "quiet" is accepted as an alias for the same option.
+#
+headless: false
+
 # ── Weston-specific options (ignored by labwc/cage) ────────────────
 #
 # weston_shell: kiosk or desktop

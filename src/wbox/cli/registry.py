@@ -17,6 +17,8 @@ Init options (non-interactive mode):
     --weston-backend TYPE    wayland or x11 — Linux only
     --weston-shell TYPE      kiosk or desktop — Linux only
     --input-backend BACKEND  hybrid, x11, or wayland — Linux only
+    --headless               Run offscreen, no window on the host desktop
+                             (labwc/cage only) — Linux only
     --title-hint TEXT        Window title substring — Windows only
     --app-command CMD        App command to launch
     --app-env KEY=VALUE      Environment variable (repeatable)
@@ -179,6 +181,8 @@ def _parse_init_args(args: list[str]) -> tuple[str | None, dict]:
             flags["title_hint"] = args[i + 1]; i += 2
         elif a == "--input-backend":
             flags["input_backend"] = args[i + 1]; i += 2
+        elif a in ("--headless", "--quiet"):
+            flags["headless"] = True; i += 1
         elif a == "--app-command":
             flags["app_command"] = args[i + 1]; i += 2
         elif a == "--app-env":
@@ -402,6 +406,8 @@ def _init_noninteractive(cfg: dict, flags: dict):
         cfg["title_hint"] = flags["title_hint"]
     if "input_backend" in flags:
         cfg["input_backend"] = flags["input_backend"]
+    if flags.get("headless"):
+        cfg["headless"] = True
 
     # App
     app_cfg = cfg.get("app", {})

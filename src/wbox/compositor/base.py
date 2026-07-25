@@ -107,7 +107,8 @@ class CompositorServer:
 
     def __init__(self, *, screen: str = "1280x800", instance_name: str = "",
                  timeouts: dict | None = None, input_backend: str | dict = "x11",
-                 undecorate: bool = True, keyboard_layout: str = ""):
+                 undecorate: bool = True, keyboard_layout: str = "",
+                 headless: bool = False):
         from wbox.config import resolve_input_backend
         self.screen = screen
         self.instance_name = instance_name
@@ -115,6 +116,7 @@ class CompositorServer:
         self.input_backends = resolve_input_backend(input_backend)
         self.undecorate = undecorate
         self.keyboard_layout = keyboard_layout
+        self.headless = headless
         # Use instance name for state file if available, else compositor name
         state_id = instance_name or self.compositor_name
         self._state_file = Path(tempfile.gettempdir()) / f"wbox_{state_id}_state.json"
@@ -140,6 +142,21 @@ class CompositorServer:
             env["XKB_DEFAULT_LAYOUT"] = self.keyboard_layout
             env.pop("XKB_DEFAULT_VARIANT", None)
             env.pop("XKB_DEFAULT_OPTIONS", None)
+        return env
+
+    def _wlroots_env(self) -> dict[str, str]:
+        """Compositor environment for wlroots backends (labwc, cage).
+
+        In headless mode wlroots renders to an offscreen output: no window
+        appears on the host desktop, while screenshots, pointer and keyboard
+        injection keep working against the nested compositor.
+        """
+        env = self._compositor_env()
+        if self.headless:
+            env["WLR_BACKENDS"] = "headless"
+            env["WLR_HEADLESS_OUTPUTS"] = "1"
+        else:
+            env["WLR_BACKENDS"] = "wayland"
         return env
 
     @staticmethod
@@ -181,6 +198,21 @@ class CompositorServer:
         """Hook called after compositor and Xwayland are ready, before app launch."""
         pass
 
+    def _wlr_output_name(self, env: dict[str, str]) -> str:
+        """First output name reported by wlr-randr.
+
+        The name depends on the wlroots backend ("WL-1" nested on Wayland,
+        "HEADLESS-1" offscreen), so it cannot be hardcoded.
+        """
+        result = self._run_cmd(["wlr-randr"], env=env, timeout=5)
+        if result.returncode != 0:
+            return ""
+        for line in result.stdout.splitlines():
+            # Output blocks start at column 0; their properties are indented
+            if line and not line[0].isspace():
+                return line.split()[0]
+        return ""
+
     def _apply_screen_size(self) -> None:
         """Set the nested output resolution via wlr-randr (wlroots only).
 
@@ -193,13 +225,17 @@ class CompositorServer:
             return
         env = os.environ.copy()
         env["WAYLAND_DISPLAY"] = self.state.wayland_display
+        output = self._wlr_output_name(env)
+        if not output:
+            log.warning("wlr-randr reported no output — cannot set screen size")
+            return
         result = self._run_cmd(
-            ["wlr-randr", "--output", "WL-1", "--custom-mode", self.screen],
+            ["wlr-randr", "--output", output, "--custom-mode", self.screen],
             env=env, timeout=5,
         )
         if result.returncode == 0:
-            log.info("Set %s output to %s via wlr-randr",
-                     self.compositor_name, self.screen)
+            log.info("Set %s output %s to %s via wlr-randr",
+                     self.compositor_name, output, self.screen)
         else:
             log.warning("wlr-randr failed: %s", result.stderr.strip())
 

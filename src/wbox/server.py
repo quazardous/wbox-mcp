@@ -46,6 +46,8 @@ def build_compositor(cfg: dict) -> CompositorServer:
     input_backend = cfg.get("input_backend", "hybrid")
     undecorate = cfg.get("undecorate", True)
     keyboard_layout = cfg.get("keyboard_layout", "")
+    # "quiet" is accepted as an alias — it is how the feature was requested
+    headless = bool(cfg.get("headless", cfg.get("quiet", False)))
 
     if backend == "win32":
         from .compositor.win32 import Win32Compositor
@@ -66,6 +68,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
             input_backend=input_backend,
             undecorate=undecorate,
             keyboard_layout=keyboard_layout,
+            headless=headless,
         )
     elif backend == "labwc":
         from .compositor.labwc import LabwcCompositor
@@ -76,6 +79,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
             input_backend=input_backend,
             undecorate=undecorate,
             keyboard_layout=keyboard_layout,
+            headless=headless,
         )
         return comp
     else:
@@ -87,6 +91,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
             input_backend=input_backend,
             undecorate=undecorate,
             keyboard_layout=keyboard_layout,
+            headless=headless,
         )
 
 

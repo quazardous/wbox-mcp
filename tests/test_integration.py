@@ -31,6 +31,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 CRASH_DUMMY_DIR = Path(__file__).parent / "crash-dummy"
 
+# Tests run offscreen by default — set WBOX_TEST_VISIBLE=1 to see the windows
+HEADLESS = os.environ.get("WBOX_TEST_VISIBLE", "") not in ("1", "true", "yes")
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -142,6 +145,10 @@ class WboxTestHarness:
             # Pin the nested seat keymap: the host may run any layout (e.g.
             # AZERTY) and input injection assumes us keycodes
             "keyboard_layout": "us",
+            # Run offscreen so the suite doesn't pop windows over the desktop.
+            # Set WBOX_TEST_VISIBLE=1 to watch what the tests are doing.
+            # weston has no usable headless mode (its screenshooter hangs).
+            "headless": HEADLESS and self.compositor != "weston",
             "timeouts": {
                 "wayland_display": 10,
                 "xwayland_display": 15,
@@ -367,13 +374,17 @@ class TestCrashDummySanity:
             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
         try:
+            # Wait for "configure", not "ready": ready is logged before the
+            # mainloop starts, while configure only fires once the window is
+            # mapped — stopping at ready races the very line we assert on.
             deadline = time.monotonic() + 10
+            content = ""
             while time.monotonic() < deadline:
-                if log_path.exists() and "ready" in log_path.read_text():
+                content = log_path.read_text() if log_path.exists() else ""
+                if "configure" in content:
                     break
-                time.sleep(0.3)
+                time.sleep(0.2)
             assert log_path.exists(), "crash_dummy log not created"
-            content = log_path.read_text()
             assert "mode=normal" in content, f"mode line missing: {content[:200]}"
             assert "ready" in content, f"ready line missing: {content[:200]}"
             assert "configure" in content, f"configure line missing: {content[:200]}"
