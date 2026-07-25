@@ -747,6 +747,7 @@ class CompositorServer:
         )
         if result.returncode != 0:
             return
+        w, h = self.screen.split("x")
         for wid in result.stdout.strip().splitlines():
             wid = wid.strip()
             if not wid:
@@ -756,6 +757,21 @@ class CompositorServer:
                 ["xprop", "-id", wid, "-f", "_MOTIF_WM_HINTS", "32c",
                  "-set", "_MOTIF_WM_HINTS", "2, 0, 0, 0, 0"],
                 env=env, timeout=5, text=False,
+            )
+            # labwc drops the SSD but leaves the window at its decorated
+            # placement (titlebar offset, shrunken size) — snap it back to
+            # the origin at full screen size. Only touch managed toplevels
+            # (WM_STATE set): the search above also yields app-internal
+            # subwindows (tk widgets), and resizing those wrecks the app
+            # layout. cage sets no WM_STATE and needs no snapping (kiosk).
+            state = self._run_cmd(["xprop", "-id", wid, "WM_STATE"],
+                                  env=env, timeout=5)
+            if "window state:" not in state.stdout:
+                continue
+            self._run_cmd(
+                ["xdotool", "windowmove", wid, "0", "0",
+                 "windowsize", wid, w, h],
+                env=env, timeout=5,
             )
         log.info("Undecorated X11 windows on %s", self.state.x_display)
 

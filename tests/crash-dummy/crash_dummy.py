@@ -9,6 +9,7 @@ Modes (CRASH_DUMMY_MODE env var):
 
 Commands (via FIFO at CRASH_DUMMY_FIFO, default log/crash_dummy.fifo):
   dump              — dump layout positions of all widgets
+  geometry          — re-log current window geometry
   open_popup        — open popup dialog
   close_popup       — close popup dialog
   ping              — respond with "pong" in log
@@ -205,6 +206,9 @@ class CrashDummy:
             self._log("pong")
         elif cmd == "dump":
             self._dump_layout()
+        elif cmd == "geometry":
+            self.root.update_idletasks()
+            self._log_geometry()
         elif cmd == "open_popup":
             self._open_popup()
         elif cmd == "close_popup":

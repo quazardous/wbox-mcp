@@ -331,11 +331,14 @@ def harness_decorate(compositor_backend):
 
 @pytest.fixture(autouse=True)
 def _fresh_log_view(request):
-    """Give each test a fresh view of the shared crash_dummy log."""
-    for name in ("harness", "harness_undecorate", "harness_decorate"):
-        if name in request.fixturenames:
-            request.getfixturevalue(name).mark_log()
-            break
+    """Give each test a fresh view of the shared crash_dummy log.
+
+    Only the module-scoped harness needs this: function-scoped harnesses are
+    freshly launched, and marking them would race against startup log lines
+    (e.g. the geometry line crash_dummy emits 500ms after start).
+    """
+    if "harness" in request.fixturenames:
+        request.getfixturevalue("harness").mark_log()
     yield
 
 
@@ -561,8 +564,17 @@ class TestDecorations:
     def test_undecorate_window_at_origin(self, harness_undecorate):
         """With undecorate=True, window should be near (0,0)."""
         h = harness_undecorate
-        time.sleep(0.5)
-        geom_lines = h.log_lines("geometry ")
+        # Ask for a fresh geometry line: launch() has already undecorated by
+        # now, while the line crash_dummy logs at startup predates it (and
+        # can be hidden by log marking under load).
+        h.mark_log()
+        if not h.send_cmd("geometry"):
+            pytest.skip("crash_dummy FIFO not available")
+        deadline = time.monotonic() + 3
+        geom_lines = []
+        while time.monotonic() < deadline and not geom_lines:
+            time.sleep(0.1)
+            geom_lines = h.log_lines("geometry ")
         assert geom_lines, "no geometry log line found"
         pos = parse_window_pos(geom_lines[-1])
         if pos:
