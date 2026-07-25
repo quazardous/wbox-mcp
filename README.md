@@ -31,16 +31,19 @@ wboxr init --name my-app --app-command "soffice --writer" --register
 | Feature | Linux | Windows |
 |---------|-------|---------|
 | Screenshot | grim (pixel-perfect) | PrintWindow (background) |
-| Keyboard | wtype (Wayland protocol) | PostMessage / SendInput |
+| Keyboard | wbox-keyboard (virtual keyboard) | PostMessage / SendInput |
 | Mouse | wbox-pointer (virtual pointer) | PostMessage / SendInput |
 | Clipboard | xclip + bridge to host | Win32 clipboard API |
 | Window management | wlrctl (list/focus) | EnumChildWindows |
 | Resize display | wlr-randr | N/A |
 | App isolation | Full (nested compositor) | None (normal process) |
 | Background operation | Yes (isolated display) | Yes (PostMessage) |
+| Offscreen / headless | Yes (`headless: true`) | N/A |
 | Interferes with host | No | Key combos briefly steal focus |
 
-**Linux** — the app runs inside a nested Wayland compositor (labwc). Full isolation: the app cannot see or interfere with your desktop. Clipboard is bridged automatically.
+**Linux** — the app runs inside a nested Wayland compositor (labwc, weston or cage). Full isolation: the app cannot see or interfere with your desktop. Clipboard is bridged automatically. Keyboard and mouse are injected through Wayland virtual-input protocols, so nothing leaks onto your own seat.
+
+Set `headless: true` and the nested session runs offscreen — no window on your desktop, while screenshots, clicks and keystrokes keep working exactly the same. Handy for test suites and unattended runs.
 
 **Windows** — the app runs as a normal process. Win32 APIs control it in the background while you keep working.
 
