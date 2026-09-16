@@ -523,6 +523,13 @@ def _make_keyboard_input(vk: int, flags: int = 0) -> INPUT:
     return inp
 
 
+def window_at_screen_point(px: int, py: int) -> int:
+    """The top-level window the user would hit by clicking that screen point."""
+    pt = wt.POINT(px, py)
+    hwnd = user32.WindowFromPoint(pt)
+    return user32.GetAncestor(hwnd, GA_ROOT) or hwnd
+
+
 def _make_unicode_input(code_unit: int, keyup: bool = False) -> INPUT:
     """A KEYEVENTF_UNICODE keystroke carrying one UTF-16 code unit.
 
@@ -995,6 +1002,15 @@ class Win32Compositor(CompositorServer):
         """Click using SendInput with absolute screen coordinates.
 
         Briefly brings window to foreground. Covers WinUI3/XAML elements.
+
+        This warps the real cursor and presses a real button, so it refuses
+        to fire unless the target point demonstrably belongs to our window.
+        Windows denies a foreground change to a process that does not already
+        own the foreground, and the old code did not check: the window stayed
+        behind, the click landed in whatever was in front — measured going
+        into an unrelated browser window — and the call still returned
+        `{"ok": true}`. A click reported as delivered that went somewhere else
+        is worse than a click that failed.
         """
         # Convert window-relative coords to screen coords
         rect = wt.RECT()
@@ -1002,8 +1018,25 @@ class Win32Compositor(CompositorServer):
         abs_x = rect.left + x
         abs_y = rect.top + y
 
-        SetForegroundWindow(self._hwnd)
-        time.sleep(0.05)
+        if not self._bring_to_foreground():
+            blocker = window_at_screen_point(abs_x, abs_y)
+            return {
+                "error": "refused to click: could not bring the window to the "
+                         "foreground, so the click would have landed in "
+                         "another window",
+                "screen_pos": (abs_x, abs_y),
+                "would_have_hit": get_window_title(blocker) or hex(blocker),
+            }
+
+        # Foreground is ours, but something always-on-top can still cover the
+        # exact point we are about to press.
+        occupant = window_at_screen_point(abs_x, abs_y)
+        if occupant and occupant != self._hwnd:
+            return {
+                "error": "refused to click: another window covers the target point",
+                "screen_pos": (abs_x, abs_y),
+                "would_have_hit": get_window_title(occupant) or hex(occupant),
+            }
 
         if button == 1:
             down_flag, up_flag = MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP
@@ -1236,11 +1269,21 @@ class Win32Compositor(CompositorServer):
         return {"ok": True, "sent": sent}
 
     def _send_key_combo(self, modifiers: list[int], main_key: int) -> dict:
-        """Send a key combo using SendInput (requires brief foreground focus)."""
-        # Briefly bring window to front for SendInput
-        if self._hwnd:
-            SetForegroundWindow(self._hwnd)
-            time.sleep(0.05)
+        """Send a key combo using SendInput (requires brief foreground focus).
+
+        SendInput delivers to the focused window, so the same rule as clicks
+        applies: without the foreground this would fire the shortcut inside
+        whatever the user is working in. Ctrl+S or Ctrl+W landing in someone
+        else's document is not a failure we can report after the fact.
+        """
+        if not self._bring_to_foreground():
+            fg = user32.GetForegroundWindow()
+            return {
+                "error": "refused to send the key combo: could not bring the "
+                         "window to the foreground, so the shortcut would have "
+                         "gone to another window",
+                "would_have_hit": get_window_title(fg) or hex(fg),
+            }
 
         inputs = []
 
@@ -1265,11 +1308,22 @@ class Win32Compositor(CompositorServer):
         self._last_mouse_x, self._last_mouse_y = x, y
 
         if self._use_sendinput_click(x, y):
-            # SendInput path — handles WinUI3 elements
+            # SendInput path — handles WinUI3 elements. Warps the real cursor,
+            # so it needs the same guard as a click: hovering a point that
+            # belongs to another window raises that window's tooltips and
+            # hover states, not ours.
             rect = wt.RECT()
             GetWindowRect(self._hwnd, ctypes.byref(rect))
             abs_x = rect.left + x
             abs_y = rect.top + y
+            occupant = window_at_screen_point(abs_x, abs_y)
+            if occupant and occupant != self._hwnd:
+                return {
+                    "error": "refused to move the pointer: that screen point "
+                             "belongs to another window",
+                    "screen_pos": (abs_x, abs_y),
+                    "would_have_hovered": get_window_title(occupant) or hex(occupant),
+                }
             inp = _make_mouse_input(abs_x, abs_y, MOUSEEVENTF_MOVE)
             array = (INPUT * 1)(inp)
             user32.SendInput(1, ctypes.byref(array), ctypes.sizeof(INPUT))
