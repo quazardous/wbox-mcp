@@ -1,0 +1,89 @@
+name: integration
+
+# Advisory for now — see the job's continue-on-error. Nested wlroots
+# compositors on a GPU-less runner are new ground for this project; a badge
+# nobody trusts is worse than no badge. Flip `continue-on-error` off once the
+# job has gone green a few times in a row.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  integration:
+    name: labwc + hybrid (headless)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+
+    env:
+      # wlroots' headless backend still needs a renderer, and the runner has
+      # no GPU and no DRM device. Without this, labwc reaches for GLES2 and
+      # fails the same way weston did on its noop renderer (see the 0.6.0
+      # entry: "weston captured nothing in headless mode").
+      WLR_RENDERER: pixman
+      # Keep the suite offscreen. This is the default, but being explicit
+      # documents that CI never wants a visible window.
+      WBOX_TEST_VISIBLE: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Heads-up for the first red run: ubuntu-latest (24.04) ships labwc
+      # 0.7.1, while this project is developed against 0.9.6. The decoration
+      # assertions in TestDecorations were written against 0.9.6's server-side
+      # decoration placement. If they fail here and pass locally, suspect the
+      # version gap before suspecting a regression — and pin or backport
+      # rather than loosening the assertion.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            labwc \
+            wlr-randr \
+            grim \
+            xwayland \
+            xdotool \
+            xclip \
+            x11-xkb-utils \
+            python3-tk \
+            xvfb
+        # Deliberately NOT installed:
+        #   wlrctl  — only used by list_windows/focus_window, which no test
+        #             exercises. It is in the archive; it just buys nothing here.
+        #   wtype   — optional since the wbox-keyboard backend landed.
+        #   ydotool — injects into the host seat, never usable for nested input.
+        #   weston, cage — not needed while this job runs labwc only.
+
+      - name: Install wbox
+        run: pip install -e .
+
+      - name: Report the toolchain
+        # A missing tool makes fixtures skip rather than fail, which would
+        # read as a pass. Print what's actually present so a green run can be
+        # checked against it.
+        run: |
+          labwc --version || true
+          for t in wlr-randr grim xdotool xclip setxkbmap Xvfb Xwayland; do
+            printf '%-12s %s\n' "$t" "$(command -v $t || echo MISSING)"
+          done
+          python3 -c "import tkinter; print('tkinter', tkinter.TkVersion)"
+
+      - name: Integration suite — labwc + hybrid
+        run: |
+          .github/scripts/run-suite.sh
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wbox-logs
+          path: tests/crash-dummy/log/
+          retention-days: 7
+          if-no-files-found: ignore

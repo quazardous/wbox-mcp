@@ -655,8 +655,9 @@ class TestDecorations:
                 f"undecorate: expected window near (0,0), got {pos}"
             )
 
-    def test_decorate_has_offset(self, harness_decorate):
-        """With undecorate=False, window should have WM offset (title bar)."""
+    def test_decorate_has_offset(self, harness_decorate, compositor_backend):
+        """With undecorate=False, a WM that decorates should offset the window."""
+        compositor, _ = compositor_backend
         h = harness_decorate
         time.sleep(0.5)
         # Check window position via xdotool
@@ -668,9 +669,23 @@ class TestDecorations:
         info = dict(l.split("=", 1) for l in geom.splitlines() if "=" in l)
         # With decorations, there should be a title bar offset or the window
         # shouldn't be at (0,0)
-        x, y = int(info.get("X", 0)), int(info.get("Y", 0))
-        # At minimum, the window should exist and have geometry
         assert "WIDTH" in info, f"no geometry found: {geom}"
+        x, y = int(info.get("X", 0)), int(info.get("Y", 0))
+        # Assert the actual decoration behaviour, not merely that geometry
+        # exists — the latter passed everywhere and tested nothing.
+        if compositor == "labwc":
+            # Stacking WM: server-side decorations push the window down by
+            # the titlebar height.
+            assert (x, y) != (0, 0), (
+                f"decorated labwc window expected below its titlebar, "
+                f"got ({x}, {y})"
+            )
+        else:
+            # cage, and weston under its kiosk shell, draw no decorations.
+            assert (x, y) == (0, 0), (
+                f"{compositor} draws no decorations: expected (0, 0), "
+                f"got ({x}, {y})"
+            )
 
 
 class TestResize:
@@ -693,12 +708,28 @@ class TestResize:
         try:
             time.sleep(0.5)
             # Resize via compositor
-            r = h.comp.resize(640, 480) if hasattr(h.comp, "resize") else None
-            if r and "error" not in r:
-                time.sleep(1)
-                size = h.comp.get_size()
-                # Just verify we got a response
-                assert "error" not in size, f"get_size failed: {size}"
+            r = h.comp.resize(640, 480)
+            if "error" in r:
+                # Only cage is allowed to refuse: it is a kiosk compositor and
+                # does not implement resize. Anything else failing here is a
+                # real regression, so assert before skipping — a bare `if` on
+                # the result silently turned this test into a no-op.
+                assert compositor == "cage", (
+                    f"{compositor} resize failed: {r['error']}"
+                )
+                pytest.skip("cage is a kiosk compositor: resize unsupported")
+            time.sleep(1)
+            size = h.comp.get_size()
+            assert "error" not in size, f"get_size failed: {size}"
+            # Assert the new size only where the compositor measured it.
+            # weston's get_size falls back to the *configured* value when it
+            # cannot find its host window — which is always the case headless
+            # — and resize() sets that value itself, so comparing would be
+            # tautological. The marker tells the two apart.
+            if size.get("source") != "configured":
+                assert (size["width"], size["height"]) == (640, 480), (
+                    f"resize to 640x480 reported {size}"
+                )
         finally:
             h.kill()
 
