@@ -7,6 +7,39 @@
   Format: https://semver.org
 -->
 
+## [0.6.0] - 2026-09-16
+
+### Added
+
+- **Headless mode**: `headless: true` (alias `quiet`, or `wboxr init --headless`) runs the nested session offscreen — nothing appears on your desktop, while screenshots, clicks and keystrokes keep working exactly the same. Ideal for test suites and unattended runs. labwc and cage render to an offscreen output; weston is switched to its software renderer automatically.
+- **`clipboard_bridge` option** (labwc): the host↔sandbox clipboard sync added in 0.5.0 is now switchable. It still defaults to `true`, but while the bridge is up the sandboxed app can read everything you copy — passwords included. Set it to `false` to keep the sandbox clipboard isolated.
+- **`wbox-keyboard` backend**: built-in virtual-keyboard client, no external tool. It uploads a US keymap and sends US-position keycodes, which is what makes typed text survive compositors that force their seat keymap onto every keyboard. Now the keyboard of the `hybrid` and `wayland` presets.
+- **`keyboard_layout` works on every compositor** (was labwc-only) and is now forced onto the nested Xwayland too. Without it, `type_text("abc123")` can arrive as `qbc!@#` on an AZERTY host.
+- **Screenshot `scale` and `region`**: shrink or crop the capture to cut image token cost. The result now also returns the file path.
+- **`setxkbmap` is a required dependency**; `wtype` and `ydotool` become optional.
+
+### Changed
+
+- **`hybrid` and `wayland` presets now use the built-in clients** — `wbox-keyboard` + `wbox-pointer` instead of wtype and xdotool/ydotool. wtype's keymap is ignored by wlroots compositors, so its keycodes decoded as `Escape 1 2 3 4 5`; ydotool injects into the *host* seat through `/dev/uinput`, so its absolute coordinates can never address the nested compositor. Both remain selectable per function.
+- **One Wayland connection per session**: the virtual pointer and keyboard are created once during launch instead of once per operation — no fork per click, and no more dropped first events.
+- **Faster hot paths**: Windows screenshots encode in ~30ms instead of ~1-3s per 1280×800 frame; an xdotool click spawns 2 processes instead of 5; `keys` sends a whole shortcut sequence in a single spawn; launch detects its sockets in tens of milliseconds instead of 300ms steps; compositor calls run off the event loop, which `launch` could previously block for ~28s.
+- **The test suite runs headless by default** (`WBOX_TEST_VISIBLE=1` to watch it), including the standalone sanity tests, which now get their own Xvfb. A full run opens no window at all.
+- **Script tool output is capped** (first 20 and last 80 lines, with the full log path always included), and tool results are rendered as compact JSON instead of Python repr.
+
+### Fixed
+
+- **Typed text was garbled on non-US hosts**, from two independent causes: the nested Xwayland kept the system layout instead of the compositor's, and wlroots compositors ignore the keymap wtype uploads.
+- **Clicks landed in the wrong place, or nowhere at all.** cage opened its output at 1280×720 whatever the configured size, scaling every coordinate; the first pointer event after launch was swallowed because the nested compositor had no pointer position yet; and a virtual pointer created per operation made every click the first event on a brand-new device, dropped roughly one time in five.
+- **`clipboard_write` reported failure on a write that had succeeded** (cage), or lost the selection immediately (labwc, with the bridge running). Wayland keeps no clipboard storage — the source client has to stay alive to serve every paste, so wbox now keeps its own.
+- **Undecorating a window left it at its decorated position** (labwc): offset by the titlebar instead of snapped to the origin.
+- **weston captured nothing in headless mode**: its headless backend defaults to a no-op renderer, so there was no framebuffer to capture and the screenshot waited forever. The pixman renderer is now forced.
+- **`wboxr register` destroyed every other entry** of an unparseable `.mcp.json` or Claude settings file. It now refuses with an explicit error, and writes atomically.
+- **`wboxr init` wrote script templates relative to the current directory** instead of next to the config file.
+- **`clean` deleted the log file the running server still held open**, silently losing all logging until the next restart.
+- **The clipboard bridge and the pointer connection leaked on `kill`** — teardown only ran on `stop`.
+- **Zombie children after `kill`**; stale Wayland sockets silently reused under a running compositor; a compositor able to block on a stderr pipe nobody drained.
+- **Windows**: `list_windows` and `focus_window` errored out (they inherited the Linux implementations), and `get_mouse_position` always returned (0, 0).
+
 ## [0.5.0] - 2026-03-13
 
 ### Added
