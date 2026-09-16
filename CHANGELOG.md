@@ -9,6 +9,14 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **A Windows guide**, [docs/windows.md](docs/windows.md): what the backend
+  can and can't do, how each kind of input is delivered, a status table
+  measured on Windows 11, and troubleshooting. It replaces the Windows
+  sections scattered across the other docs, and says plainly up front that
+  Windows gets no isolation.
+
 ### Fixed
 
 - **Clicks can no longer land in someone else's window on Windows.** A
