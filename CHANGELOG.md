@@ -11,6 +11,16 @@
 
 ### Fixed
 
+- **Clicks can no longer land in someone else's window on Windows.** A
+  `SendInput` click warps the real cursor and presses a real button, and
+  Windows refuses to bring a window forward for a process that isn't already
+  in front. When that happened the app stayed behind, the click went into
+  whatever *was* in front — measured going into an unrelated browser — and
+  `click` still returned `{"ok": true}`. `click`, `mouse_move` and modifier
+  key combos now verify that the window is genuinely in front and that the
+  target point belongs to it, and return an error naming the window they
+  would have hit instead of clicking it.
+
 - **`type_text` no longer destroys your clipboard on Windows** (#2583). It used
   to save the clipboard, paste, and restore — but it only ever saved plain
   text, while emptying the clipboard drops *every* format. Copy an image, let

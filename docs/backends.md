@@ -71,6 +71,15 @@ outside the client area all route to `SendInput`, which calls
 `SetForegroundWindow` and then warps the **real mouse cursor** to the target
 before clicking. Your pointer jumps, and the window comes to the front.
 
+**When it cannot come to the front, the call is refused.** Windows denies a
+foreground change to a process that does not already own the foreground, and
+a `SendInput` click then presses a real button wherever the pointer lands —
+in your window, not the app's. `click`, `mouse_move` and modifier key combos
+each check that the app really is in front, and that the target point really
+belongs to it, before injecting anything. If not, they return an error naming
+the window they would have hit. Until 0.6.1 they returned `{"ok": true}` and
+clicked it.
+
 **`type_text` never touches the clipboard.** It types the characters. Which
 way depends on whether the window can be brought to the front:
 
