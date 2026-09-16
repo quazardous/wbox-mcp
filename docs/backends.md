@@ -58,7 +58,7 @@ No compositor needed. Uses Win32 APIs directly:
 |----------|-----|-------------|
 | Screenshot | `PrintWindow` (`PW_RENDERFULLCONTENT`) | Yes |
 | Clicks | `PostMessage`, or `SendInput` — see below | **Usually not** |
-| Text input | Clipboard + `Ctrl+V` via `SendInput` | No (steals focus) |
+| Text input | `SendInput` `KEYEVENTF_UNICODE`, else posted `WM_CHAR` | Yes, on the fallback path |
 | Single keys | `PostMessage WM_KEYDOWN/UP` | Yes |
 | Key combos | `SendInput` | No (briefly steals focus) |
 | Modal dialogs | `EnumChildWindows` / `EnumWindows` | Yes |
@@ -71,10 +71,25 @@ outside the client area all route to `SendInput`, which calls
 `SetForegroundWindow` and then warps the **real mouse cursor** to the target
 before clicking. Your pointer jumps, and the window comes to the front.
 
-`type_text` never uses `WM_CHAR`. It saves the clipboard, writes the text to
-it, sends `Ctrl+V` through `SendInput`, and restores the clipboard afterwards
-— so typing also takes focus, and briefly puts your text on the system
-clipboard.
+**`type_text` never touches the clipboard.** It types the characters. Which
+way depends on whether the window can be brought to the front:
+
+- **Foreground obtainable** — `SendInput` with `KEYEVENTF_UNICODE`, one
+  character per call, paced. The pacing is not politeness: a single
+  `SendInput` carrying the whole string is silently mangled by WinUI3
+  controls (`hello wbox 12345` arrives as `hello wbox 5555`), while the same
+  batch is flawless on Tk. The foreground is re-checked before *every*
+  character, so if you click away mid-sentence the call stops and reports how
+  much it typed instead of spraying the rest into your window.
+- **Foreground refused** — the characters are posted as `WM_CHAR` to the
+  window itself, which takes no focus at all. This needs the window to be
+  *active* in the input sense, so wbox attaches its input queue to the app's
+  thread and calls `SetActiveWindow` for the duration, then detaches.
+  Without that, toolkits that dispatch through the active-window state (Tk)
+  drop every posted character on the floor.
+
+Both paths carry non-BMP characters (emoji) as surrogate pairs, and send
+`\n` and `\t` as virtual keys rather than as text.
 
 ## Windows limitations
 
@@ -112,10 +127,11 @@ not. Some GPU-composited and DirectComposition surfaces also render as blank
 or black under `PrintWindow`, which is why the `PW_RENDERFULLCONTENT` flag is
 tried first.
 
-**`type_text` can lose a non-text clipboard.** The save-and-restore only
-handles `CF_UNICODETEXT`. If your clipboard held an image, files, or any other
-format, there is nothing to restore and the original content is gone once wbox
-overwrites it. A clipboard history tool will also capture whatever was typed.
+**`type_text` used to destroy a non-text clipboard.** Until 0.6.1 it went
+through the clipboard, and its save-and-restore only handled
+`CF_UNICODETEXT` while `EmptyClipboard` dropped every format — so an image or
+a file selection was gone for good. It no longer touches the clipboard at
+all; if you are on an older version, it does.
 
 **Which operations disturb you**, in one list:
 
@@ -124,15 +140,17 @@ overwrites it. A clipboard history tool will also capture whatever was typed.
 | `screenshot` | No | No |
 | `click` on the edit control | No | No |
 | `click` anywhere else | Yes | **Yes** |
-| `type_text` | Yes | No |
+| `type_text` when the window can be raised | Yes | No |
+| `type_text` when it cannot | No | No |
 | `key` without modifiers, no modal | No | No |
 | `key` with modifiers, or with a modal open | Yes | No |
 | `clipboard_read` / `clipboard_write` | No | No |
 
-> These limits are derived from the implementation in
-> `src/wbox/compositor/win32.py` and from documented Windows behaviour. They
-> have **not** been re-verified on a Windows machine for this revision — if you
-> hit something that contradicts the table, the table is what's wrong.
+> The `type_text` rows were measured on Windows 11 (French locale, 150%
+> scaling) against Tk and Win11 Notepad. The rest is still derived from the
+> implementation in `src/wbox/compositor/win32.py` and from documented Windows
+> behaviour, and has **not** been re-verified on a Windows machine — if you hit
+> something that contradicts the table, the table is what's wrong.
 
 ## Windows-specific config
 

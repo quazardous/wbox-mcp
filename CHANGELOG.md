@@ -7,6 +7,23 @@
   Format: https://semver.org
 -->
 
+## [Unreleased]
+
+### Fixed
+
+- **`type_text` no longer destroys your clipboard on Windows** (#2583). It used
+  to save the clipboard, paste, and restore — but it only ever saved plain
+  text, while emptying the clipboard drops *every* format. Copy an image, let
+  Claude type, and the image was gone for good. It now types the characters
+  instead and never touches the clipboard. Rich text (`CF_HTML`) was quietly
+  being flattened the same way; that stops too.
+
+  Typing goes through `SendInput`/`KEYEVENTF_UNICODE` when the window can be
+  raised, and posts `WM_CHAR` when it cannot — the second path takes no focus
+  at all. Emoji and other non-BMP characters work on both. If you click away
+  mid-sentence, typing now stops and tells you how far it got, rather than
+  finishing the sentence inside whatever you clicked on.
+
 ## [0.6.0] - 2026-09-16
 
 ### Added
