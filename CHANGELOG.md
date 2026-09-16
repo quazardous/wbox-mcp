@@ -38,6 +38,7 @@
 - **`clean` deleted the log file the running server still held open**, silently losing all logging until the next restart.
 - **The clipboard bridge and the pointer connection leaked on `kill`** — teardown only ran on `stop`.
 - **Zombie children after `kill`**; stale Wayland sockets silently reused under a running compositor; a compositor able to block on a stderr pipe nobody drained.
+- **`undecorate` silently did nothing without `xprop`.** The option needs it to clear `_MOTIF_WM_HINTS`, but the check returned without a word and `xprop` was never in the installer's required list — so on a machine lacking `x11-utils` the app kept its titlebar and every screenshot coordinate was off by its height, with nothing to explain why. `xprop` is now a required dependency and its absence is logged.
 - **`post_launch_keys` did nothing.** The option was documented and announced in 0.5.0, but only the development harness ever acted on it — the real MCP server launched the app and returned without sending the keys. Apps that need a shortcut once they render (maximizing, dismissing a first-run dialog) silently never got it.
 - **Windows**: `list_windows` and `focus_window` errored out (they inherited the Linux implementations), and `get_mouse_position` always returned (0, 0).
 

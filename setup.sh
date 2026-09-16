@@ -90,6 +90,7 @@ DEPS_MAP=(
     "grim:grim:grim:grim"
     "weston-screenshooter:weston:weston:weston"
     "xev:xorg-x11-utils:x11-utils:xorg-xev"
+    "xprop:xprop:x11-utils:xorg-xprop"
     "xclip:xclip:xclip:xclip"
     "xsel:xsel:xsel:xsel"
     "wtype:wtype:wtype:wtype"
@@ -129,7 +130,7 @@ install_pkgs() {
 
 # ── Runtime dependencies ───────────────────────────────────────────
 
-REQUIRED_BINS=(labwc grim xdotool setxkbmap wlr-randr wlrctl)
+REQUIRED_BINS=(labwc grim xdotool xprop setxkbmap wlr-randr wlrctl)
 OPTIONAL_BINS=(weston cage weston-screenshooter xev xclip xsel ydotool wl-copy wtype)
 
 MISSING_REQUIRED=()

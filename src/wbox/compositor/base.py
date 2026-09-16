@@ -860,6 +860,13 @@ class CompositorServer:
         if not self.state.x_display:
             return
         if not shutil.which("xprop"):
+            # Without xprop there is no undecorate at all: the app keeps its
+            # titlebar and every screenshot coordinate is off by its height.
+            # Returning silently made that look like a compositor quirk.
+            log.warning(
+                "undecorate: xprop not found — decorations left in place "
+                "(install x11-utils / xorg-x11-utils)"
+            )
             return
         env = os.environ.copy()
         env["DISPLAY"] = self.state.x_display

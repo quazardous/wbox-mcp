@@ -51,6 +51,7 @@ jobs:
             xwayland \
             xdotool \
             xclip \
+            x11-utils \
             x11-xkb-utils \
             python3-tk \
             xvfb
@@ -71,7 +72,7 @@ jobs:
         # checked against it.
         run: |
           labwc --version || true
-          for t in wlr-randr grim xdotool xclip setxkbmap Xvfb Xwayland; do
+          for t in wlr-randr grim xdotool xclip xprop setxkbmap Xvfb Xwayland; do
             printf '%-12s %s\n' "$t" "$(command -v $t || echo MISSING)"
           done
           python3 -c "import tkinter; print('tkinter', tkinter.TkVersion)"
