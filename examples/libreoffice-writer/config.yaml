@@ -1,0 +1,68 @@
+# LibreOffice Writer inside wbox.
+#
+# Every non-default value below is here for a reason, and the reason is in the
+# comment. LibreOffice is slow, modal and stateful — the three things that
+# break naive GUI automation — so this doubles as the reference for what to
+# change when you point wbox at your own heavyweight app.
+
+name: libreoffice-writer
+
+compositor: labwc          # labwc | weston | cage — labwc is resizable and
+                           # implements the virtual-input protocols hybrid needs
+screen: "1280x800"
+input_backend: hybrid      # wbox-keyboard + wbox-pointer + xclip
+
+# Runs offscreen: nothing appears on your desktop while Claude drives Writer,
+# and you keep using the machine. Set to false the first few times if you want
+# to watch it work — everything else behaves identically.
+headless: true
+
+undecorate: true           # drop the titlebar so screenshot coordinates match
+                           # the app's own, with no decoration offset
+
+# NOT optional on a non-US host. Input injection sends US keycode positions; if
+# the nested seat keeps your layout, type_text("abc123") arrives as "qbc!@#".
+keyboard_layout: us
+
+timeouts:
+  wayland_display: 10
+  xwayland_display: 15
+  # The default is 3. LibreOffice does not come close — a cold start here takes
+  # ~20s, and the very first run of a new profile takes longer still. If you
+  # see "app did not render", raise this before suspecting wbox.
+  app_render: 40
+  stop: 15
+
+app:
+  # -env:UserInstallation pins a scratch profile. Two reasons, both mattering
+  # more than they sound:
+  #   1. Reproducibility — without it you inherit whatever extensions, locale
+  #      and toolbar layout the reader's LibreOffice happens to have, and the
+  #      screenshots stop matching.
+  #   2. Isolation — the demo never touches your real LibreOffice settings.
+  # Delete that directory to get the first-run experience back.
+  command: soffice -env:UserInstallation=file:///tmp/wbox-libreoffice-profile --writer --norestore
+
+  # On a fresh profile LibreOffice opens a modal "Welcome to LibreOffice!"
+  # wizard on top of the document. It swallows every keystroke: type_text
+  # reports success and the document stays empty (verified — the status bar
+  # read "0 words, 0 characters"). Escape dismisses it; sending it
+  # unconditionally is harmless once the profile is initialised.
+  post_launch_keys: ["Escape"]
+  # The wizard appears a few seconds AFTER the window first renders, so this
+  # delay is waiting for the dialog, not for the app.
+  post_launch_keys_delay: 5.0
+
+  env:
+    # Pin the UI language so the run matches expected.png whatever locale the
+    # reader's machine uses. Same reasoning as the scratch profile: the recipe
+    # demonstrates wbox, not the reader's LibreOffice setup. Drop this to get
+    # Writer in your own language.
+    LANG: en_US.UTF-8
+    LC_ALL: en_US.UTF-8
+
+log:
+  dir: ./log
+  level: info
+
+screenshot_dir: ./screenshots
