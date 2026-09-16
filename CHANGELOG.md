@@ -19,6 +19,15 @@
 
 ### Fixed
 
+- **The Windows installer works on a machine without Python.** Windows ships a
+  `python.exe` that only opens the Microsoft Store; the installer took it for
+  Python, skipped installing it, and died. It now checks that Python actually
+  runs, installs it when it doesn't — through `winget`, or through uv when
+  `winget` is missing — and builds the environment from the interpreter it
+  found. Two further crashes that were waiting right behind this one are fixed
+  too: Windows PowerShell 5.1 aborted the install on the first progress line
+  uv printed, and re-running the installer to update failed because the
+  environment already existed.
 - **Clicks can no longer land in someone else's window on Windows.** A
   `SendInput` click warps the real cursor and presses a real button, and
   Windows refuses to bring a window forward for a process that isn't already

@@ -26,15 +26,17 @@ Windows app on the machine you are sitting at, read on.
 irm https://raw.githubusercontent.com/quazardous/wbox-mcp/main/setup.ps1 | iex
 ```
 
-> **Known issue — no Python installed.** Windows ships a `python.exe` that is
-> only an *App Execution Alias*: running it opens the Microsoft Store. The
-> installer sees that alias, concludes Python is present, skips installing it,
-> and then fails on `python --version`. If that happens, use the manual route
-> below, or install Python first (`winget install Python.Python.3.12`) and run
-> the installer again.
+It installs whatever is missing: `uv`, `git`, and Python. For Python it tries
+`winget` first and falls back to a copy managed by uv, which needs no admin
+rights — so a machine with no Python at all ends up with one either way.
+
+It does not trust the `python.exe` Windows ships by default. That file is an
+*App Execution Alias* that only opens the Microsoft Store; an earlier version
+of the installer mistook it for Python, skipped installing it, and failed.
+Candidates are now run and must answer.
 
 **Manual install** with [uv](https://docs.astral.sh/uv/), which brings its own
-Python and does not care about the alias:
+Python:
 
 ```powershell
 irm https://astral.sh/uv/install.ps1 | iex

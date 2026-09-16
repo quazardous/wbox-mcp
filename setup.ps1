@@ -43,14 +43,56 @@ Options:
 Write-Host "=== wbox-mcp setup (Windows) ==="
 Write-Host ""
 
+# ── Helpers ──────────────────────────────────────────────────────
+
+# Windows PowerShell 5.1, with $ErrorActionPreference = "Stop", turns every
+# stderr line of a native command into a terminating NativeCommandError as
+# soon as stderr is redirected — even when the command succeeds. uv and
+# winget report progress on stderr, so `uv venv ... 2>$null` would abort the
+# install on its first line of progress. Run native tools through this and
+# judge them by $LASTEXITCODE instead.
+function Invoke-Native([scriptblock]$Command) {
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & $Command } finally { $ErrorActionPreference = $saved }
+}
+
+function Update-SessionPath {
+    $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+}
+
+# Path of a working Python interpreter >= 3.10, or $null.
+#
+# `Get-Command python` proves nothing: Windows ships python.exe as an "App
+# Execution Alias" that only opens the Microsoft Store. It resolves, so this
+# installer used to conclude Python was present, skip installing it, and then
+# die on `python --version`. Candidates are run and must answer.
+function Find-Python {
+    if (Get-Command uv -ErrorAction SilentlyContinue) {
+        # --system: without it uv prefers a .venv in the current directory,
+        # and re-running the installer from its own folder would "find" the
+        # venv it is about to (re)create. It still finds uv-managed Pythons.
+        $found = Invoke-Native { (uv python find --system ">=3.10" 2>$null | Out-String).Trim() }
+        if ($LASTEXITCODE -eq 0 -and $found -and (Test-Path $found)) { return $found }
+    }
+    foreach ($name in @("python", "py")) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if (-not $cmd) { continue }
+        # Ask for the interpreter itself: `py` is a launcher, not a Python.
+        $exe = Invoke-Native {
+            (& $cmd.Source -c "import sys; print(sys.executable if sys.version_info >= (3, 10) else '')" 2>$null | Out-String).Trim()
+        }
+        if ($LASTEXITCODE -eq 0 -and $exe -and (Test-Path $exe)) { return $exe }
+    }
+    return $null
+}
+
 # ── Check prerequisites ──────────────────────────────────────────
 
 $missing = @()
-foreach ($cmd in @("python", "uv", "git")) {
-    if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
-        $missing += $cmd
-    }
-}
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) { $missing += "uv" }
+if (-not (Find-Python)) { $missing += "python" }
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) { $missing += "git" }
 
 if ($missing.Count -gt 0) {
     Write-Host "Missing required tools: $($missing -join ', ')" -ForegroundColor Yellow
@@ -61,21 +103,8 @@ if ($missing.Count -gt 0) {
     # Auto-install what we can
     $stillMissing = @()
 
-    if ($missing -contains "python") {
-        if ($hasWinget) {
-            Write-Host "  Installing Python via winget..." -ForegroundColor Cyan
-            winget install --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements -e 2>$null
-            # Refresh PATH for this session
-            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
-            if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-                $stillMissing += "python"
-            }
-        } else {
-            Write-Host "  python: install from https://www.python.org/downloads/"
-            $stillMissing += "python"
-        }
-    }
-
+    # uv goes first: it is needed anyway, and it is the fallback that
+    # installs Python when winget is missing or does not deliver one.
     if ($missing -contains "uv") {
         Write-Host "  Installing uv..." -ForegroundColor Cyan
         try {
@@ -101,11 +130,30 @@ if ($missing.Count -gt 0) {
         }
     }
 
+    if ($missing -contains "python") {
+        if ($hasWinget) {
+            Write-Host "  Installing Python via winget..." -ForegroundColor Cyan
+            Invoke-Native { winget install --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements -e 2>$null }
+            Update-SessionPath
+        }
+        # No winget, or winget did not leave a usable interpreter behind (a
+        # declined prompt, a policy, the Store alias still first on PATH):
+        # uv installs its own copy — no admin rights, no PATH entry needed.
+        if (-not (Find-Python) -and (Get-Command uv -ErrorAction SilentlyContinue)) {
+            Write-Host "  Installing Python via uv..." -ForegroundColor Cyan
+            Invoke-Native { uv python install 3.12 }
+        }
+        if (-not (Find-Python)) {
+            Write-Host "  python: install from https://www.python.org/downloads/"
+            $stillMissing += "python"
+        }
+    }
+
     if ($missing -contains "git") {
         if ($hasWinget) {
             Write-Host "  Installing git via winget..." -ForegroundColor Cyan
-            winget install --id Git.Git --accept-source-agreements --accept-package-agreements -e 2>$null
-            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+            Invoke-Native { winget install --id Git.Git --accept-source-agreements --accept-package-agreements -e 2>$null }
+            Update-SessionPath
             if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
                 $stillMissing += "git"
             }
@@ -125,10 +173,10 @@ if ($missing.Count -gt 0) {
     Write-Host ""
 }
 
-$pythonVersion = (python --version 2>&1).ToString()
-Write-Host "  python: $pythonVersion"
-Write-Host "  uv:     $((uv --version 2>&1).ToString())"
-Write-Host "  git:    $((git --version 2>&1).ToString())"
+$pythonExe = Find-Python
+Write-Host "  python: $(Invoke-Native { (& $pythonExe --version 2>&1 | Out-String).Trim() }) ($pythonExe)"
+Write-Host "  uv:     $(Invoke-Native { (uv --version 2>&1 | Out-String).Trim() })"
+Write-Host "  git:    $(Invoke-Native { (git --version 2>&1 | Out-String).Trim() })"
 Write-Host ""
 
 # ── Check Windows version ────────────────────────────────────────
@@ -185,8 +233,11 @@ Write-Host "Installing package..."
 Push-Location $InstallDir
 
 try {
-    # Create venv
-    uv venv --python python .venv 2>$null
+    # Create venv — from the interpreter found above, never from whatever
+    # `python` happens to resolve to. --allow-existing: re-running the
+    # installer to update must reuse the venv, and uv refuses an existing one
+    # without it.
+    Invoke-Native { uv venv --allow-existing --python $pythonExe .venv 2>$null }
 
     # Activate and install
     $venvPython = Join-Path $InstallDir ".venv\Scripts\python.exe"
