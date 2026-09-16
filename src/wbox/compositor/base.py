@@ -890,7 +890,16 @@ class CompositorServer:
             state = self._run_cmd(["xprop", "-id", wid, "WM_STATE"],
                                   env=env, timeout=5)
             if "window state:" not in state.stdout:
+                # Skipping silently here is how a window that should have been
+                # snapped goes unnoticed: the app then sits at its decorated
+                # placement and every screenshot coordinate is off by the
+                # titlebar. Say which window, and what xprop actually replied.
+                log.debug(
+                    "undecorate: skipping %s, no WM_STATE (xprop: %s)",
+                    wid, state.stdout.strip()[:120] or "<empty>",
+                )
                 continue
+            log.info("undecorate: snapping %s to 0,0 at %sx%s", wid, w, h)
             self._run_cmd(
                 ["xdotool", "windowmove", wid, "0", "0",
                  "windowsize", wid, w, h],

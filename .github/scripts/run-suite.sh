@@ -11,6 +11,7 @@ set -euo pipefail
 python -m pytest tests/test_integration.py \
     -k "labwc-hybrid or (not labwc and not weston and not cage)" \
     -v -rs \
+    --log-level=DEBUG \
     --junitxml=report.xml
 
 python - <<'PY'
