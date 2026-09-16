@@ -8,6 +8,12 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.optional-dependencies]
+# The integration suite's runner. Declared here rather than installed ad hoc in
+# CI, so `pip install -e ".[test]"` is the one documented way to get a working
+# test environment — contributor or runner alike.
+test = ["pytest>=8"]
+
 [project.scripts]
 wboxr = "wbox.cli.registry:main"
 wbox-mcp = "wbox.cli.server:main"

@@ -62,7 +62,8 @@ jobs:
         #   weston, cage — not needed while this job runs labwc only.
 
       - name: Install wbox
-        run: pip install -e .
+        run: pip install -e ".[test]"
+
 
       - name: Report the toolchain
         # A missing tool makes fixtures skip rather than fail, which would
@@ -74,6 +75,7 @@ jobs:
             printf '%-12s %s\n' "$t" "$(command -v $t || echo MISSING)"
           done
           python3 -c "import tkinter; print('tkinter', tkinter.TkVersion)"
+          python -m pytest --version
 
       - name: Integration suite — labwc + hybrid
         run: |
