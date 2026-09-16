@@ -106,6 +106,17 @@ for _c in range(ord("0"), ord("9") + 1):
 
 MODIFIER_KEYS = {"ctrl", "control", "shift", "alt", "menu", "super", "win", "lwin"}
 
+# Characters that have to be sent as a virtual key rather than as text:
+# KEYEVENTF_UNICODE with U+000A does not produce a newline in an edit
+# control, it produces nothing.
+TYPING_VK = {
+    "\n": VK_MAP["enter"],
+    "\r": VK_MAP["enter"],
+    "\t": VK_MAP["tab"],
+}
+
+GA_ROOT = 2  # GetAncestor()
+
 # ── Win32 API bindings ───────────────────────────────────────────
 
 user32 = ctypes.windll.user32
@@ -478,6 +489,19 @@ class INPUT(ctypes.Structure):
 INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
 
+# Keyboard event flags
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_UNICODE = 0x0004
+
+# Typing pace, in seconds per character, for the KEYEVENTF_UNICODE path.
+# Not cosmetic: a single SendInput call carrying the whole string is
+# silently mangled by WinUI3 controls — `hello wbox 12345` arrives as
+# `hello wbox 5555`, and an accented sample collapses onto its last
+# character. Measured on Win11 Notepad (RichEditD2DPT); the same batch is
+# flawless on Tk, so it cannot be caught without a Windows run. 20ms per
+# character is the shortest pace that came back exact on both. See #2583.
+MIN_TYPE_PACE = 0.020
+
 # Mouse event flags
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_LEFTDOWN = 0x0002
@@ -497,6 +521,26 @@ def _make_keyboard_input(vk: int, flags: int = 0) -> INPUT:
     inp._input.ki.wScan = scan
     inp._input.ki.dwFlags = flags
     return inp
+
+
+def _make_unicode_input(code_unit: int, keyup: bool = False) -> INPUT:
+    """A KEYEVENTF_UNICODE keystroke carrying one UTF-16 code unit.
+
+    wVk must be 0 and the code unit rides in wScan. Characters outside the
+    BMP are two code units and need two of these, in order.
+    """
+    inp = INPUT()
+    inp.type = INPUT_KEYBOARD
+    inp._input.ki.wVk = 0
+    inp._input.ki.wScan = code_unit
+    inp._input.ki.dwFlags = KEYEVENTF_UNICODE | (KEYEVENTF_KEYUP if keyup else 0)
+    return inp
+
+
+def utf16_units(ch: str) -> tuple[int, ...]:
+    """The UTF-16 code units of a single character (two for a surrogate pair)."""
+    encoded = ch.encode("utf-16-le")
+    return struct.unpack(f"<{len(encoded) // 2}H", encoded)
 
 
 def _make_mouse_input(abs_x: int, abs_y: int, flags: int) -> INPUT:
@@ -1020,42 +1064,134 @@ class Win32Compositor(CompositorServer):
 
         return {"ok": True, "method": "PostMessage", "target_hwnd": hex(target), "client_pos": (tx, ty)}
 
+    def _bring_to_foreground(self) -> bool:
+        """Raise the app window and confirm it actually came forward.
+
+        Windows refuses a foreground change from a process that does not
+        already own the foreground or has not just received input; the call
+        can come back having only flashed the taskbar button. Trusting it is
+        how input ends up in whatever window is actually in front — so ask
+        GetForegroundWindow rather than the return value.
+        """
+        if not self._hwnd:
+            return False
+        SetForegroundWindow(self._hwnd)
+        time.sleep(0.15)
+        return self._is_foreground()
+
+    def _is_foreground(self) -> bool:
+        """Is our window the one that would receive injected keystrokes?"""
+        if not self._hwnd:
+            return False
+        fg = user32.GetForegroundWindow()
+        return (user32.GetAncestor(fg, GA_ROOT) or fg) == self._hwnd
+
+    def _type_unicode_sendinput(self, text: str, pace: float) -> dict:
+        """Type via SendInput/KEYEVENTF_UNICODE, one character per call.
+
+        One call per character on purpose — see MIN_TYPE_PACE.
+        """
+        sent = 0
+        for ch in text:
+            # Re-check before *every* character, not just once at the start:
+            # typing a sentence takes hundreds of milliseconds, and if the
+            # user clicks away mid-string the rest of the keystrokes would be
+            # delivered into whatever they clicked on. Stop instead.
+            if not self._is_foreground():
+                return {"error": "lost the foreground while typing",
+                        "typed": sent, "length": len(text),
+                        "method": "sendinput_unicode"}
+            vk = TYPING_VK.get(ch)
+            if vk is not None:
+                inputs = [_make_keyboard_input(vk),
+                          _make_keyboard_input(vk, flags=KEYEVENTF_KEYUP)]
+            else:
+                inputs = []
+                for unit in utf16_units(ch):
+                    inputs += [_make_unicode_input(unit),
+                               _make_unicode_input(unit, keyup=True)]
+            array = (INPUT * len(inputs))(*inputs)
+            if user32.SendInput(len(inputs), ctypes.byref(array),
+                                ctypes.sizeof(INPUT)) != len(inputs):
+                return {"error": "SendInput rejected the keystroke",
+                        "typed": sent, "length": len(text),
+                        "last_error": kernel32.GetLastError()}
+            sent += 1
+            time.sleep(pace)
+        return {"ok": True, "length": len(text), "method": "sendinput_unicode"}
+
+    def _type_wm_char(self, text: str, pace: float) -> dict:
+        """Type via posted WM_CHAR — works without focus, and on a window
+        whose desktop is not the input desktop, where SendInput is refused."""
+        target = self._edit_hwnd or self._hwnd
+
+        # Toolkits that dispatch keystrokes through the active-window state
+        # drop posted characters outright when the window is not active: on
+        # Tk, zero key events arrive without this and every character arrives
+        # with it. SetActiveWindow is what does the work — SetFocus alone
+        # measurably does not — and it only accepts a window whose thread
+        # shares our input queue, hence the attach. This activates the window
+        # *within the attached input state*, without taking the foreground
+        # away from whatever the user is doing.
+        # Always detached again below: leaving two input queues attached
+        # couples this process to the app's responsiveness.
+        tid_target = user32.GetWindowThreadProcessId(self._hwnd, None)
+        tid_self = kernel32.GetCurrentThreadId()
+        attached = bool(user32.AttachThreadInput(tid_self, tid_target, True))
+        if attached:
+            user32.SetActiveWindow(self._hwnd)
+
+        try:
+            for ch in text:
+                if not IsWindow(target):
+                    return {"error": "the target window went away while typing",
+                            "typed": text.index(ch), "length": len(text),
+                            "method": "postmessage_wm_char"}
+                vk = TYPING_VK.get(ch)
+                # Tab is left to WM_CHAR: posting VK_TAB moves focus instead
+                # of inserting a character.
+                if vk is not None and ch != "\t":
+                    scan = user32.MapVirtualKeyW(vk, 0)
+                    PostMessageW(target, WM_KEYDOWN, vk, (scan << 16) | 1)
+                    time.sleep(0.01)
+                    PostMessageW(target, WM_KEYUP, vk,
+                                 (scan << 16) | 1 | (1 << 30) | (1 << 31))
+                else:
+                    for unit in utf16_units(ch):
+                        PostMessageW(target, WM_CHAR, unit, 1)
+                time.sleep(pace)
+        finally:
+            if attached:
+                user32.AttachThreadInput(tid_self, tid_target, False)
+
+        return {"ok": True, "length": len(text), "method": "postmessage_wm_char",
+                "target_hwnd": hex(target), "input_attached": attached}
+
     def type_text(self, text: str, delay_ms: int = 12) -> dict:
         if not self.is_running():
             return {"error": "app is not running"}
+        if not text:
+            return {"ok": True, "length": 0, "method": "noop"}
 
-        # Use clipboard + Ctrl+V to type text.
-        # This always targets the active tab/document (unlike PostMessage
-        # which goes to a fixed HWND that may belong to a hidden tab).
-        # Save current clipboard content
-        old_clip = None
-        if OpenClipboard(0):
-            try:
-                handle = GetClipboardData(CF_UNICODETEXT)
-                if handle:
-                    ptr = GlobalLock(ctypes.c_void_p(handle))
-                    if ptr:
-                        try:
-                            old_clip = ctypes.wstring_at(ptr)
-                        finally:
-                            GlobalUnlock(ctypes.c_void_p(handle))
-            finally:
-                CloseClipboard()
+        # #2583: this used to go through the clipboard — save CF_UNICODETEXT,
+        # EmptyClipboard, paste, restore. EmptyClipboard drops *every* format
+        # while only text was saved, so an image or a file selection on the
+        # user's clipboard was destroyed outright, with no way back. Typing
+        # the characters keeps the clipboard out of the path entirely.
+        pace = max(delay_ms / 1000.0, MIN_TYPE_PACE)
+        text = text.replace("\r\n", "\n")  # one Enter, not two
 
-        # Write text to clipboard
-        result = self.clipboard_write(text)
-        if "error" in result:
-            return result
+        if self._bring_to_foreground():
+            return self._type_unicode_sendinput(text, pace)
 
-        # Ctrl+V to paste
-        paste_result = self._send_key_combo([VK_MAP["ctrl"]], VK_MAP["v"])
-        time.sleep(0.1)
-
-        # Restore previous clipboard content
-        if old_clip is not None:
-            self.clipboard_write(old_clip)
-
-        return {"ok": True, "length": len(text), "method": "clipboard_paste"}
+        # Could not take the foreground: SendInput would type into whichever
+        # window is actually in front. Post the characters instead — slower to
+        # reach some toolkits, but it can only ever land in our own window.
+        log.info("type_text: could not take the foreground, "
+                 "falling back to WM_CHAR")
+        result = self._type_wm_char(text, pace)
+        result["note"] = "window could not be brought to the foreground"
+        return result
 
     def key(self, shortcut: str) -> dict:
         if not self.is_running():
