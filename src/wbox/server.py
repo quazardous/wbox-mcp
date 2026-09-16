@@ -589,6 +589,17 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
 
             result = await asyncio.to_thread(compositor.launch, app_cmd, app_env)
             log.info("launch result: %s", result)
+
+            # Shortcuts to send once the app has rendered (maximize, dismiss a
+            # first-run dialog...). The dev harness has always honored these;
+            # the real server never did, so the documented config key was dead.
+            post_keys = cfg.get("app", {}).get("post_launch_keys", [])
+            if post_keys and "error" not in result:
+                delay = cfg.get("app", {}).get("post_launch_keys_delay", 0.5)
+                await asyncio.to_thread(
+                    compositor.send_post_launch_keys, post_keys, delay
+                )
+
             return _reply(result)
 
         if name == "stop":
