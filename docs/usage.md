@@ -287,7 +287,6 @@ sudo pacman -S labwc grim xdotool xorg-setxkbmap wlr-randr wlrctl wl-clipboard x
 
 No system dependencies — the Win32 backend uses `ctypes` to call Windows APIs directly.
 
-Needed: `python`, `uv`, `git`. **Windows 10+** required. `setup.ps1` installs
-`uv` and `git` when missing, but can be fooled into skipping Python by the
-Microsoft Store alias — see [windows.md](windows.md#install) for the symptom and
-the manual route.
+Needed: `python` (3.10+), `uv`, `git`. **Windows 10+** required. `setup.ps1`
+installs any of them that is missing — Python through `winget`, or through uv
+when `winget` is unavailable. See [windows.md](windows.md#install).

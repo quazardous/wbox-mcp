@@ -31,7 +31,7 @@ curl -sSL https://raw.githubusercontent.com/quazardous/wbox-mcp/main/setup.sh | 
 irm https://raw.githubusercontent.com/quazardous/wbox-mcp/main/setup.ps1 | iex
 ```
 
-On Windows, read [docs/windows.md](docs/windows.md) first — there is no isolation there, and the installer has a known issue on machines without Python.
+On Windows, read [docs/windows.md](docs/windows.md) first — there is no isolation there. The installer sets up Python too if the machine has none.
 
 **What that script does**, so you can decide before running it: it installs the missing system packages through your distro's package manager (`dnf`, `apt` or `pacman`, asking first), clones this repo into `~/.local/share/wbox-mcp`, installs it into a venv there, and symlinks the two commands `wboxr` and `wbox-mcp` into `~/.local/bin`. It touches nothing else and needs `sudo` only for the packages.
 
