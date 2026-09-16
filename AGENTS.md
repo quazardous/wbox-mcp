@@ -74,7 +74,7 @@ Use it to verify:
 | `tests/mcp-dev/server.py` | Dynamic MCP wrapper (no wbox import) |
 | `tests/mcp-dev/worker.py` | Worker subprocess (imports wbox, handles compositor) |
 | `tests/test_integration.py` | Pytest suite: all compositor × backend × mode combos |
-| `docs/matrix.md` | Compatibility matrix with scores |
+| `docs/matrix.md` | Compatibility matrix, regenerated from a full suite run |
 
 ## Common Bugs and Fixes
 
