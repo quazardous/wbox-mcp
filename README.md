@@ -31,6 +31,8 @@ curl -sSL https://raw.githubusercontent.com/quazardous/wbox-mcp/main/setup.sh | 
 irm https://raw.githubusercontent.com/quazardous/wbox-mcp/main/setup.ps1 | iex
 ```
 
+On Windows, read [docs/windows.md](docs/windows.md) first — there is no isolation there, and the installer has a known issue on machines without Python.
+
 **What that script does**, so you can decide before running it: it installs the missing system packages through your distro's package manager (`dnf`, `apt` or `pacman`, asking first), clones this repo into `~/.local/share/wbox-mcp`, installs it into a venv there, and symlinks the two commands `wboxr` and `wbox-mcp` into `~/.local/bin`. It touches nothing else and needs `sudo` only for the packages.
 
 **Manual install**, if you'd rather not pipe a script into a shell:
@@ -108,22 +110,24 @@ Two settings are worth knowing before you automate a real app:
 
 | Feature | Linux | Windows |
 |---------|-------|---------|
-| Screenshot | grim (pixel-perfect) | PrintWindow (background) |
-| Keyboard | wbox-keyboard (virtual keyboard) | PostMessage / SendInput |
-| Mouse | wbox-pointer (virtual pointer) | PostMessage / SendInput |
-| Clipboard | xclip + bridge to host | Win32 clipboard API |
-| Window management | wlrctl (list/focus) | EnumChildWindows |
-| Resize display | wlr-randr | N/A |
-| App isolation | Full (nested compositor) | None (normal process) |
-| Background operation | Yes (isolated display) | Yes (PostMessage) |
-| Offscreen / headless | Yes (`headless: true`) | N/A |
+| Screenshot | grim (pixel-perfect) | PrintWindow — works behind other windows |
+| Keyboard | wbox-keyboard (virtual keyboard) | SendInput (Unicode) / PostMessage |
+| Mouse | wbox-pointer (virtual pointer) | SendInput / PostMessage |
+| Clipboard | xclip + bridge to host | Win32 clipboard API — yours, shared |
+| Window management | wlrctl (list/focus) | Currently broken — returns nothing |
+| Resize display | wlr-randr | Resizes the window, a few pixels off |
+| App isolation | Full (nested compositor) | **None** (normal process) |
+| Background operation | Yes (isolated display) | Screenshots only; most input takes focus |
+| Offscreen / headless | Yes (`headless: true`) | No — `headless` is ignored |
 | Interferes with host | No | Yes — most clicks move your cursor and take focus |
 
 **Linux** — the app runs inside a nested Wayland compositor (labwc, weston or cage). Full isolation: the app cannot see or interfere with your desktop. Clipboard is bridged automatically, and you can switch that bridge off. Keyboard and mouse are injected through Wayland virtual-input protocols, so nothing leaks onto your own seat.
 
 Set `headless: true` and the nested session runs offscreen — no window on your desktop, while screenshots, clicks and keystrokes keep working exactly the same. Handy for test suites and unattended runs.
 
-**Windows** — the app runs as a normal process, driven through Win32 APIs. Screenshots and clipboard work in the background, but there is no isolation: the app shares your desktop and your clipboard, and most clicks warp your real mouse cursor and pull the window to the front. Elevated apps are largely off-limits, and a click on one reports success while doing nothing. See [Windows limitations](docs/backends.md#windows-limitations) before you rely on it.
+**Windows** — the app runs as a normal process, driven through Win32 APIs. There is no isolation: the app shares your desktop and your clipboard, and most clicks warp your real mouse cursor and pull the window to the front. Screenshots work even when the window is covered.
+
+Two things are safer than they used to be. `type_text` types the characters and never touches your clipboard. And when the app window can't be brought to the front, `click`, `mouse_move` and key combos refuse and name the window that is in the way, instead of clicking it. Elevated apps remain largely off-limits. [docs/windows.md](docs/windows.md) has what was measured to work, the limitations, and troubleshooting.
 
 ## MCP tools
 
@@ -141,8 +145,9 @@ Plus custom script tools via `wboxr tool add`.
 ## Documentation
 
 - [docs/usage.md](docs/usage.md) — CLI flags, config.yaml reference, MCP tools details, requirements
-- [docs/backends.md](docs/backends.md) — compositor comparison, input backends, compatibility matrix
-- [docs/matrix.md](docs/matrix.md) — what's verified to work, per compositor and backend
+- [docs/backends.md](docs/backends.md) — compositor comparison, input backends
+- [docs/matrix.md](docs/matrix.md) — what's verified to work on Linux, per compositor and backend
+- [docs/windows.md](docs/windows.md) — the Windows backend: install, input routing, measured status, limitations, troubleshooting
 
 ## License
 

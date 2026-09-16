@@ -229,6 +229,8 @@ tools:
 
 ### Windows (Win32 backend)
 
+Several Linux keys (`headless`, `screen`, `input_backend`, …) are accepted but ignored here — [windows.md](windows.md#keys-that-do-nothing-on-windows) has the list.
+
 ```yaml
 name: my-app
 compositor: win32          # auto-detected on Windows
@@ -285,4 +287,7 @@ sudo pacman -S labwc grim xdotool xorg-setxkbmap wlr-randr wlrctl wl-clipboard x
 
 No system dependencies — the Win32 backend uses `ctypes` to call Windows APIs directly.
 
-Needed: `python`, `uv`, `git` (auto-installed by `setup.ps1`). **Windows 10+** required.
+Needed: `python`, `uv`, `git`. **Windows 10+** required. `setup.ps1` installs
+`uv` and `git` when missing, but can be fooled into skipping Python by the
+Microsoft Store alias — see [windows.md](windows.md#install) for the symptom and
+the manual route.
