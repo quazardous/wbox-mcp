@@ -49,15 +49,19 @@ jobs:
             wlr-randr \
             grim \
             xwayland \
+            wlrctl \
             xdotool \
             xclip \
             x11-utils \
             x11-xkb-utils \
             python3-tk \
             xvfb
+        # wlrctl earns its place since #3205: focus_window still shells out to
+        # it, and TestWindowState exercises that. list_windows no longer does
+        # — it reads the foreign-toplevel protocol directly — so converting
+        # focus_window the same way would drop this dependency again.
+        #
         # Deliberately NOT installed:
-        #   wlrctl  — only used by list_windows/focus_window, which no test
-        #             exercises. It is in the archive; it just buys nothing here.
         #   wtype   — optional since the wbox-keyboard backend landed.
         #   ydotool — injects into the host seat, never usable for nested input.
         #   weston, cage — not needed while this job runs labwc only.
@@ -72,7 +76,7 @@ jobs:
         # checked against it.
         run: |
           labwc --version || true
-          for t in wlr-randr grim xdotool xclip xprop setxkbmap Xvfb Xwayland; do
+          for t in wlr-randr wlrctl grim xdotool xclip xprop setxkbmap Xvfb Xwayland; do
             printf '%-12s %s\n' "$t" "$(command -v $t || echo MISSING)"
           done
           python3 -c "import tkinter; print('tkinter', tkinter.TkVersion)"
