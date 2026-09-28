@@ -97,6 +97,56 @@ def build_compositor(cfg: dict) -> CompositorServer:
         )
 
 
+# Keys build_compositor() consumes. A change to any of them cannot be applied
+# to a compositor that already exists, so `launch` refuses rather than running
+# with the value the server started with (#3178).
+_COMPOSITOR_KEYS = (
+    "compositor", "screen", "name", "timeouts", "input_backend", "undecorate",
+    "keyboard_layout", "clipboard_bridge", "title_hint",
+    "weston_shell", "weston_backend",
+)
+
+
+def _compositor_fingerprint(cfg: dict) -> dict:
+    """The subset of the config the live compositor was built from."""
+    fp = {k: cfg.get(k) for k in _COMPOSITOR_KEYS}
+    # "quiet" is an accepted alias, so compare what build_compositor computes,
+    # not the raw keys: headless:true and quiet:true must not read as a change.
+    fp["headless"] = bool(cfg.get("headless", cfg.get("quiet", False)))
+    return fp
+
+
+def _reload_cfg(cfg: dict) -> dict | None:
+    """Re-read config.yaml, re-applying the CLI overrides.
+
+    Returns the fresh config, or None when there is nothing to re-read (no
+    file, or it has become unreadable — in which case the caller keeps what it
+    has rather than launching from a half-parsed file).
+
+    The overrides matter: they come from the `.mcp.json` args and were applied
+    once at startup. Re-reading the file without them would silently drop
+    `-s app.command=...`, which is the very class of bug this reload fixes.
+    """
+    path = cfg.get("_config_path")
+    if not path or not Path(path).exists():
+        return None
+    try:
+        fresh = load_config(path)
+    except Exception as exc:  # a half-written or invalid file
+        log.warning("config reload failed, keeping the loaded one: %s", exc)
+        return None
+    if not fresh:
+        return None
+    overrides = cfg.get("_overrides") or []
+    if overrides:
+        apply_overrides(fresh, overrides)
+    # Carry over what create_server resolved and the file does not hold.
+    for k in ("_log_dir", "_screenshot_dir", "_overrides"):
+        if k in cfg:
+            fresh[k] = cfg[k]
+    return fresh
+
+
 def _build_app_cmd(cfg: dict) -> list[str]:
     """Build app command from config."""
     app_cfg = cfg.get("app", {})
@@ -291,6 +341,7 @@ async def _run_script_tool(
 
 def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
     compositor = build_compositor(cfg)
+    built_from = _compositor_fingerprint(cfg)
     script_tools = cfg.get("tools", {})
     app_cmd = _build_app_cmd(cfg)
     app_env = _build_app_env(cfg)
@@ -571,6 +622,34 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
         log.info("tool_call: %s %s", name, arguments or "")
 
         if name == "launch":
+            # Re-read config.yaml first (#3178). The server used to launch
+            # whatever it was started with: editing app.command and calling
+            # launch again ran the OLD command, and tvty lost an app onto real
+            # user data that way. Worse, headless and clipboard_bridge were
+            # frozen too, so a session could be visible on the desktop, and
+            # bridging the clipboard, while its config said otherwise.
+            fresh = _reload_cfg(cfg)
+            if fresh is not None:
+                changed = [
+                    k for k, v in _compositor_fingerprint(fresh).items()
+                    if built_from.get(k) != v
+                ]
+                if changed:
+                    # These cannot be applied to a compositor that already
+                    # exists. Refusing and naming the keys beats running with
+                    # the old values and reporting success.
+                    return [TextContent(type="text", text=(
+                        "refused to launch: "
+                        + ", ".join(sorted(changed))
+                        + " changed in config.yaml since this server started, "
+                        "and they are fixed when the compositor is built. "
+                        "Restart the wbox-mcp server to apply them."
+                    ))]
+                # Same dict, new contents: every handler reading cfg at call
+                # time (post_launch_keys, script tools) sees the fresh values.
+                cfg.clear()
+                cfg.update(fresh)
+
             # Run pre-launch scripts
             cwd = str(Path(cfg.get("_config_dir", ".")).resolve())
             for script in pre_launch_scripts:
@@ -587,7 +666,9 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                     out = "\n".join(s for s in (result.stdout, result.stderr) if s)
                     return [TextContent(type="text", text=f"pre_launch failed: {script}\n{out}")]
 
-            result = await asyncio.to_thread(compositor.launch, app_cmd, app_env)
+            result = await asyncio.to_thread(
+                compositor.launch, _build_app_cmd(cfg), _build_app_env(cfg)
+            )
             log.info("launch result: %s", result)
 
             # Shortcuts to send once the app has rendered (maximize, dismiss a
@@ -764,6 +845,8 @@ async def amain(config_path: str | None = None, overrides: list[str] | None = No
     cfg = load_config(config_path or "config.yaml")
     if not cfg.get("_config_dir"):
         cfg["_config_dir"] = str(Path(config_path).parent) if config_path else "."
+    # Kept so `launch` can re-apply them when it re-reads the file (#3178).
+    cfg["_overrides"] = list(overrides or [])
     if overrides:
         apply_overrides(cfg, overrides)
 

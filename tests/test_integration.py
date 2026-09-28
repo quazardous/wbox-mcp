@@ -515,6 +515,77 @@ class TestCrashDummySanity:
             _stop_proc(proc)
 
 
+class TestConfigReload:
+    """#3178 — the server used to launch whatever config it started with.
+
+    No compositor needed: the defect was in how the config reaches launch,
+    and these are the four behaviours that make the fix worth having.
+    """
+
+    @staticmethod
+    def _cfg(tmp_path, **kw):
+        import yaml
+        base = {"name": "t", "compositor": "labwc", "screen": "800x600",
+                "headless": True, "app": {"command": "xterm"}}
+        base.update(kw)
+        f = tmp_path / "config.yaml"
+        f.write_text(yaml.dump(base))
+        return f
+
+    def _loaded(self, path, overrides=None):
+        from wbox.config import apply_overrides, load_config
+        cfg = load_config(path)
+        cfg["_overrides"] = list(overrides or [])
+        if overrides:
+            apply_overrides(cfg, overrides)
+        return cfg
+
+    def test_edited_command_is_picked_up(self, tmp_path):
+        """The incident: launch ran the old command until the server restarted."""
+        from wbox.server import _build_app_cmd, _reload_cfg
+        cfg = self._loaded(self._cfg(tmp_path))
+        assert _build_app_cmd(cfg) == ["xterm"]
+        self._cfg(tmp_path, app={"command": "soffice --writer"})
+        assert _build_app_cmd(_reload_cfg(cfg)) == ["soffice", "--writer"]
+
+    def test_cli_overrides_survive_the_reload(self, tmp_path):
+        """Re-reading the file must not drop `-s key=value` from .mcp.json."""
+        from wbox.server import _reload_cfg
+        cfg = self._loaded(self._cfg(tmp_path), ["app.env.FOO=bar"])
+        self._cfg(tmp_path, app={"command": "other"})
+        assert _reload_cfg(cfg)["app"]["env"] == {"FOO": "bar"}
+
+    def test_compositor_key_change_is_detected(self, tmp_path):
+        """headless flipping is what makes this a safety bug, not a nuisance."""
+        from wbox.server import _compositor_fingerprint, _reload_cfg
+        cfg = self._loaded(self._cfg(tmp_path))
+        built = _compositor_fingerprint(cfg)
+        self._cfg(tmp_path, headless=False)
+        fresh = _compositor_fingerprint(_reload_cfg(cfg))
+        assert [k for k, v in fresh.items() if built.get(k) != v] == ["headless"]
+
+    def test_quiet_alias_is_not_a_change(self, tmp_path):
+        """`quiet: true` means `headless: true`; it must not refuse a launch."""
+        import yaml
+        from wbox.server import _compositor_fingerprint, _reload_cfg
+        f = self._cfg(tmp_path)
+        cfg = self._loaded(f)
+        built = _compositor_fingerprint(cfg)
+        raw = yaml.safe_load(f.read_text())
+        raw.pop("headless")
+        raw["quiet"] = True
+        f.write_text(yaml.dump(raw))
+        fresh = _compositor_fingerprint(_reload_cfg(cfg))
+        assert [k for k, v in fresh.items() if built.get(k) != v] == []
+
+    def test_unreadable_config_keeps_the_loaded_one(self, tmp_path):
+        """A half-written file must not become the config a launch uses."""
+        from wbox.server import _reload_cfg
+        cfg = self._loaded(self._cfg(tmp_path))
+        (tmp_path / "config.yaml").write_text("app: {command: [unclosed\n")
+        assert _reload_cfg(cfg) is None
+
+
 class TestLaunch:
     """Verify compositor launches correctly."""
 
