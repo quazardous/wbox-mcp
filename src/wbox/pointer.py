@@ -216,6 +216,13 @@ def _parse_shortcut(shortcut: str) -> tuple[int, int, list[int]]:
     raise ValueError(f"unknown key {key!r} in {shortcut!r}")
 
 
+# zwlr_foreign_toplevel_management_v1: what a third party may know about the
+# windows a compositor manages. labwc, cage and KWin all announce it.
+FTL_MGR = "zwlr_foreign_toplevel_manager_v1"
+# zwlr_foreign_toplevel_handle_v1.state values
+FTL_STATES = {0: "maximized", 1: "minimized", 2: "activated", 3: "fullscreen"}
+
+
 class WaylandClient:
     """Minimal Wayland wire-protocol client (pure Python)."""
 
@@ -226,6 +233,9 @@ class WaylandClient:
         self.recv_buf = b""
         # discovered globals: {name_uint: (interface_str, version_uint)}
         self.globals = {}
+        # foreign-toplevel: manager id, and {handle_id: {...}} as it fills in
+        self._ftl_mgr_id = 0
+        self._toplevels = {}
         # bound object ids
         self._registry_id = 0
         self._seat_id = 0
@@ -360,6 +370,28 @@ class WaylandClient:
             ver, off = self._get_uint(payload, off)
             self.globals[name] = (iface, ver)
 
+        # zwlr_foreign_toplevel_manager_v1.toplevel (opcode 0): a new handle,
+        # whose id the SERVER allocates — hence tracking it by what arrives
+        # rather than by anything we asked for.
+        elif oid and oid == self._ftl_mgr_id and op == 0:
+            handle, _ = self._get_uint(payload, 0)
+            self._toplevels[handle] = {"title": "", "app_id": "", "state": []}
+
+        # zwlr_foreign_toplevel_handle_v1 events
+        elif oid in self._toplevels:
+            tl = self._toplevels[oid]
+            if op == 0:      # title
+                tl["title"], _ = self._get_string(payload, 0)
+            elif op == 1:    # app_id
+                tl["app_id"], _ = self._get_string(payload, 0)
+            elif op == 4:    # state: an array of uint32
+                n, off = self._get_uint(payload, 0)
+                vals = struct.unpack_from(f"<{n // 4}I", payload, off) if n else ()
+                tl["state"] = sorted(
+                    FTL_STATES[v] for v in vals if v in FTL_STATES)
+            elif op == 6:    # closed
+                self._toplevels.pop(oid, None)
+
         # wl_output.mode (opcode 1)
         elif oid == self._output_id and op == 1:
             off = 0
@@ -369,6 +401,28 @@ class WaylandClient:
             if flags & WL_OUTPUT_MODE_CURRENT and not self._size_forced:
                 self.screen_w = w
                 self.screen_h = h
+
+    def list_toplevels(self):
+        """Every window the compositor manages, with its state.
+
+        Returns a list of {app_id, title, state, activated}, or None when the
+        compositor does not announce the protocol. `activated` is the one a
+        test usually wants: which window has the focus.
+        """
+        if not self._ftl_mgr_id:
+            self._ftl_mgr_id = self.bind(FTL_MGR, 3)
+            if not self._ftl_mgr_id:
+                return None
+        # The compositor replies with one toplevel event per window, then the
+        # title, app_id and state of each. Two roundtrips: the first brings
+        # the handles, the second what they carry.
+        self.roundtrip()
+        self.roundtrip()
+        return [
+            {"app_id": tl["app_id"], "title": tl["title"],
+             "state": tl["state"], "activated": "activated" in tl["state"]}
+            for tl in self._toplevels.values()
+        ]
 
     def get_registry(self):
         self._registry_id = self._alloc()

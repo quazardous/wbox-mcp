@@ -807,9 +807,26 @@ class CompositorServer:
     # ── Window management ──────────────────────────────────────────
 
     def list_windows(self) -> dict:
-        """List windows/toplevels in the compositor via wlrctl."""
+        """List the compositor's windows, with their state where available.
+
+        Prefers the foreign-toplevel protocol: it carries `activated` — which
+        window has the focus — and wlrctl does not report it at all (its
+        `state:` matcher is ignored by `list`, and `find` exits 0 even for a
+        state that does not exist). Falls back to wlrctl when the compositor
+        does not announce the protocol.
+        """
         if not self.is_running():
             return {"error": "compositor is not running"}
+
+        if self.state.wayland_display:
+            try:
+                windows = self._vptr_client().list_toplevels()
+            except (OSError, EOFError, RuntimeError, ValueError) as exc:
+                log.debug("foreign-toplevel unavailable (%s), trying wlrctl", exc)
+            else:
+                if windows is not None:
+                    return {"windows": windows}
+
         if not shutil.which("wlrctl"):
             return {"error": "wlrctl not found — install wlrctl"}
         env = self._wl_env()

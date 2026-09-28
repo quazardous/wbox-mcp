@@ -642,6 +642,96 @@ class TestMouseAccuracy:
                 )
 
 
+class TestWindowState:
+    """#3205 — which window has the focus, readable by a test.
+
+    tvty needs it to check that a second launch raises the first window.
+    wlrctl cannot answer: its `state:` matcher is ignored by `list`, and
+    `find` exits 0 even for a state that does not exist.
+    """
+
+    @staticmethod
+    def _state_or_skip(comp, compositor, app_mode="normal"):
+        """The windows with their state, or a skip naming why there is none.
+
+        Two backends legitimately have nothing to report, and they fail
+        differently: weston announces no foreign-toplevel protocol at all, so
+        even the wlrctl fallback errors out; cage is a kiosk, so its single
+        surface is never "activated". Both skip BY NAME — a third backend
+        going quiet must not hide behind them.
+        """
+        if app_mode == "fullscreen":
+            # The app sets overrideredirect, which bypasses the window
+            # manager by definition: it is not a managed toplevel, so no
+            # window-management protocol can see it — foreign-toplevel here,
+            # and wlrctl before it, which uses the same protocol. Nothing to
+            # fix, and nothing this test can say.
+            pytest.skip("fullscreen: overrideredirect bypasses the WM")
+
+        result = comp.list_windows()
+        if "error" in result:
+            assert compositor == "weston", (
+                f"{compositor} could not list windows: {result['error']}"
+            )
+            pytest.skip(f"weston: no window state ({result['error']})")
+        windows = result["windows"]
+        if not windows or "activated" not in windows[0]:
+            assert compositor in ("weston", "cage"), (
+                f"{compositor} reported no window state: {result}"
+            )
+            pytest.skip(f"{compositor}: no window state reported")
+        return windows
+
+    def test_list_windows_reports_which_is_activated(self, harness):
+        h = harness
+        windows = self._state_or_skip(h.comp, h.compositor, h.app_mode)
+        if not any(w["activated"] for w in windows):
+            # A kiosk compositor hands its surface no activation at all.
+            assert h.compositor == "cage", (
+                f"{h.compositor} lists windows but activates none: {windows}"
+            )
+            pytest.skip("cage is a kiosk: its surface is never activated")
+
+    def test_focus_window_moves_the_activated_flag(self, harness):
+        """The flag must follow the focus, not merely exist."""
+        h = harness
+        self._state_or_skip(h.comp, h.compositor, h.app_mode)
+
+        h.send_cmd("open_popup")
+        time.sleep(1.2)
+        try:
+            after = h.comp.list_windows()["windows"]
+            if len(after) < 2:
+                assert h.compositor == "cage", (
+                    f"{h.compositor} did not open the popup as its own "
+                    f"toplevel: {after}"
+                )
+                pytest.skip("cage is a kiosk: one surface, no second toplevel")
+
+            # By TITLE, not app_id: labwc reports the app as `tk` and cage as
+            # `Tk`, so an app_id filter silently matches the wrong window and
+            # then blames the compositor for it.
+            main = [w for w in after if "crash dummy popup" not in w["title"]]
+            popup = [w for w in after if "crash dummy popup" in w["title"]]
+            assert popup, f"no popup toplevel among {after}"
+            if not popup[0]["activated"]:
+                assert h.compositor == "cage", (
+                    f"the popup opened but did not take the focus: {after}"
+                )
+                pytest.skip("cage is a kiosk: opening a window does not focus it")
+
+            assert "error" not in h.comp.focus_window(title="wbox crash dummy")
+            time.sleep(0.8)
+            back = h.comp.list_windows()["windows"]
+            main = [w for w in back if "crash dummy popup" not in w["title"]]
+            assert main and main[0]["activated"], (
+                f"focus_window did not bring the main window back: {back}"
+            )
+        finally:
+            h.send_cmd("close_popup")
+            time.sleep(0.5)
+
+
 class TestGestures:
     """#3127 — wheel, drag, double-click and a held modifier.
 

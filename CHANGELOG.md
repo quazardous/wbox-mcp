@@ -7,6 +7,31 @@
   Format: https://semver.org
 -->
 
+## [Unreleased]
+
+### Added
+
+- **`list_windows` says which window has the focus** (#3205). Each window now
+  carries `activated`, plus the rest of its state (`maximized`, `minimized`,
+  `fullscreen`). A test can finally check that raising a window worked, rather
+  than that the call returned without an error.
+
+  It reads the `zwlr_foreign_toplevel_manager_v1` protocol directly instead of
+  shelling out to `wlrctl`, which cannot answer: its `state:` matcher is
+  ignored by `list`, and `find` exits 0 even for a state that does not exist.
+  `wlrctl` remains the fallback where a compositor does not announce the
+  protocol. Two cases report nothing, by construction rather than by
+  omission: weston announces no such protocol, and a window set
+  `overrideredirect` is not a managed toplevel at all, so nothing that manages
+  windows can see it.
+
+  Not available, and not for want of trying: whether the compositor draws a
+  decoration for a window. No Wayland protocol exposes that to a third party —
+  `zxdg_decoration_manager_v1` and its KDE equivalent negotiate between the
+  client and the compositor, and say nothing to an observer. The geometry is
+  the observable proxy: a decorated window sits below its titlebar rather than
+  at the origin.
+
 ## [0.7.0] - 2026-09-28
 
 ### Added
