@@ -9,3 +9,4 @@ screenshots/
 .mcp.json
 .claude/settings.local.json
 .aiball.yaml
+.aiball-session_id
