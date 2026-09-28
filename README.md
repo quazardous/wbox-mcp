@@ -131,7 +131,7 @@ Two things are safer than they used to be. `type_text` types the characters and 
 
 ## MCP tools
 
-`launch` · `stop` · `kill` · `screenshot` · `click` · `type_text` · `key` · `keys` · `mouse_move` · `get_mouse_position` · `get_size` · `resize` · `list_windows` · `focus_window` · `clipboard_read` · `clipboard_write` · `tail_log` · `clean` · `debug_input`
+`launch` · `stop` · `kill` · `screenshot` · `click` · `dblclick` · `drag` · `scroll` · `hold` · `type_text` · `key` · `keys` · `mouse_move` · `get_mouse_position` · `get_size` · `resize` · `list_windows` · `focus_window` · `clipboard_read` · `clipboard_write` · `tail_log` · `clean` · `debug_input`
 
 Plus custom script tools via `wboxr tool add`.
 

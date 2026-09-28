@@ -9,6 +9,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Four gestures a test needs and a click cannot express**: `scroll`,
+  `drag`, `dblclick` and `hold`. The travel is what makes `drag` a drag — a
+  press followed by a jump to the destination produces none of the motion a
+  resize handle or a text selection watches for, so it takes steps and a
+  duration. `hold` keeps modifiers down across a whole sequence of keys,
+  clicks and screenshots, which is the only way to watch a gesture that acts
+  on release, such as an alt-tab switcher, while it is still up — and the
+  release is guaranteed even when an action in the middle fails.
+  `hold` refuses outright when the keyboard and the mouse inject through
+  different transports (reachable with a per-function `input_backend`): a
+  modifier held on the Wayland virtual keyboard never reaches a click sent
+  through XTEST, so ctrl+click would silently arrive as a bare click.
+
+### Fixed
+
+- **`launch` used the config the server started with** (#3178). Editing
+  `config.yaml` and calling `launch` again ran the *old* command — one wbox
+  user launched an app outside the sandbox, onto real data, that way. The
+  command was the visible half: `headless` and `clipboard_bridge` were frozen
+  just as hard, so a session could be visible on the desktop and bridging the
+  clipboard while its config said otherwise. `launch` now re-reads the file,
+  and refuses — naming the key — when a setting that is fixed at compositor
+  build time has changed.
+
 ### Documentation
 
 - **A Windows guide**, [docs/windows.md](docs/windows.md): what the backend

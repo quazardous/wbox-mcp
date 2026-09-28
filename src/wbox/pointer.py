@@ -23,6 +23,7 @@ Environment (CLI):
     WBOX_SCREEN       Display size WxH (overrides auto-detect)
 """
 
+import contextlib
 import os
 import socket
 import struct
@@ -466,6 +467,86 @@ class WaylandClient:
 
         self.roundtrip()
 
+    def _button(self, vp, btn, state):
+        """One button event plus its frame (opcode 2, then 4)."""
+        self._send(vp, 2,
+                   self._uint(_now_ms()) + self._uint(btn) + self._uint(state))
+        self._send(vp, 4)  # frame
+        self.roundtrip()
+
+    def double_click(self, x, y, button=1, interval=0.08):
+        """Two clicks close enough together that the toolkit reads one gesture.
+
+        `interval` is the gap between them. Too long and it is two clicks; too
+        short and some toolkits coalesce them. 80ms sits inside every default
+        double-click threshold we have measured.
+        """
+        btn = {1: BTN_LEFT, 2: BTN_MIDDLE, 3: BTN_RIGHT}.get(button, BTN_LEFT)
+        vp = self._ensure_vptr()
+        self._motion(vp, x, y)
+        for i in range(2):
+            self._button(vp, btn, PRESSED)
+            self._button(vp, btn, RELEASED)
+            if i == 0:
+                time.sleep(interval)
+
+    def scroll(self, x, y, notches, horizontal=False):
+        """Wheel at (x, y). Negative scrolls up (or left).
+
+        A wheel notch is 15 units of axis value, sent as 24.8 fixed point
+        alongside the discrete count — that pairing is what makes a toolkit
+        treat it as a notch rather than as smooth scrolling.
+        """
+        vp = self._ensure_vptr()
+        self._motion(vp, x, y)
+        axis = 1 if horizontal else 0
+        step = -1 if notches < 0 else 1
+        for _ in range(abs(int(notches))):
+            self._send(vp, 5, self._uint(0))  # axis_source: wheel
+            # axis_discrete: time, axis, value (24.8 fixed), discrete
+            self._send(vp, 7,
+                       self._uint(_now_ms()) + self._uint(axis)
+                       + struct.pack("<i", step * 15 * 256)
+                       + struct.pack("<i", step))
+            self._send(vp, 4)  # frame
+            self.roundtrip()
+            time.sleep(0.03)
+
+    def drag(self, x1, y1, x2, y2, button=1, steps=10, seconds=0.3):
+        """Press at the start, travel in steps, release at the end.
+
+        The travel is the point. A press followed by a single jump to the
+        destination does not produce the motion events an app watches for, so
+        a resize handle or a text selection never sees the drag happen.
+        """
+        btn = {1: BTN_LEFT, 2: BTN_MIDDLE, 3: BTN_RIGHT}.get(button, BTN_LEFT)
+        steps = max(1, int(steps))
+        pause = max(0.0, float(seconds)) / steps
+        vp = self._ensure_vptr()
+        self._motion(vp, x1, y1)
+        self._button(vp, btn, PRESSED)
+        try:
+            for i in range(1, steps + 1):
+                self._motion(vp, x1 + (x2 - x1) * i // steps,
+                             y1 + (y2 - y1) * i // steps)
+                self.roundtrip()
+                time.sleep(pause)
+        finally:
+            # Never leave a button down: it would capture every later event.
+            self._button(vp, btn, RELEASED)
+
+    def glide(self, x1, y1, x2, y2, steps=10, seconds=0.3):
+        """Travel with no button held — a hand passing over a list."""
+        steps = max(1, int(steps))
+        pause = max(0.0, float(seconds)) / steps
+        vp = self._ensure_vptr()
+        for i in range(0, steps + 1):
+            self._motion(vp, x1 + (x2 - x1) * i // steps,
+                         y1 + (y2 - y1) * i // steps)
+            self._send(vp, 4)  # frame
+            self.roundtrip()
+            time.sleep(pause)
+
     # ── Virtual keyboard ──
 
     def _ensure_vkbd(self):
@@ -527,6 +608,58 @@ class WaylandClient:
         self._send(self._vkbd_id, 2,
                    self._uint(mask) + self._uint(0) +
                    self._uint(0) + self._uint(0))
+
+    @contextlib.contextmanager
+    def modifiers_held(self, names):
+        """Hold modifiers for the body of a `with`, and release them always.
+
+        A modifier left depressed outlives the call: every later keystroke and
+        click in the session carries it, and nothing says why. So the release
+        lives in a `finally` — it runs when a key in the middle fails, when a
+        screenshot raises, and when the caller is killed mid-sequence.
+
+        Holding one is also the only way to observe a gesture that acts on
+        release: an alt-tab switcher is only on screen while alt is down.
+        """
+        codes, mask = [], 0
+        for name in names:
+            try:
+                m_mask, m_code = _MODIFIERS[name.lower()]
+            except KeyError:
+                raise ValueError(
+                    f"unknown modifier {name!r}, expected one of "
+                    f"{sorted(_MODIFIERS)}"
+                ) from None
+            codes.append(m_code)
+            mask |= m_mask
+
+        self._ensure_vkbd()
+        for code in codes:
+            self._kbd_key(code, PRESSED)
+        self._kbd_mods(mask)
+        self.roundtrip()
+        try:
+            yield
+        finally:
+            self._kbd_mods(0)
+            for code in reversed(codes):
+                self._kbd_key(code, RELEASED)
+            self.roundtrip()
+
+    def tap(self, key):
+        """Press and release one key, leaving any held modifier alone.
+
+        `key_combo` sends its own modifiers and clears them afterwards, which
+        would drop whatever `modifiers_held` is holding. This is the one to
+        call inside a hold.
+        """
+        code, _, _ = _parse_shortcut(key)
+        if not code:
+            raise ValueError(f"unknown key: {key!r}")
+        self._ensure_vkbd()
+        self._kbd_key(code, PRESSED)
+        self._kbd_key(code, RELEASED)
+        self.roundtrip()
 
     def type_text(self, text, delay_ms=12):
         """Type text through the virtual keyboard (US layout keycodes)."""

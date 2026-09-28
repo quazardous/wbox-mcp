@@ -1112,6 +1112,173 @@ class CompositorServer:
         """Click via wbox-pointer (Wayland virtual pointer)."""
         return self._vptr_op("click", x, y, button)
 
+    # ── Gestures (#3127) ───────────────────────────────────────────
+
+    def scroll(self, x: int, y: int, notches: int, horizontal: bool = False) -> dict:
+        """Wheel at (x, y). Negative scrolls up (or left)."""
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        self._last_mouse_x, self._last_mouse_y = x, y
+        if self.input_backends["mouse"] == "wbox-pointer":
+            return self._vptr_op("scroll", x, y, notches, horizontal)
+        # xdotool buttons: 4 up, 5 down, 6 left, 7 right.
+        up, down = (6, 7) if horizontal else (4, 5)
+        button = up if notches < 0 else down
+        return self._xdotool("mousemove", str(x), str(y),
+                             "click", "--repeat", str(abs(int(notches))),
+                             str(button))
+
+    def double_click(self, x: int, y: int, button: int = 1,
+                     interval: float = 0.08) -> dict:
+        """Two clicks close enough together to read as one gesture."""
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        self._last_mouse_x, self._last_mouse_y = x, y
+        if self.input_backends["mouse"] == "wbox-pointer":
+            return self._vptr_op("double_click", x, y, button, interval)
+        return self._xdotool("mousemove", str(x), str(y),
+                             "click", "--repeat", "2",
+                             "--delay", str(int(interval * 1000)), str(button))
+
+    def drag(self, x1: int, y1: int, x2: int, y2: int, button: int = 1,
+             steps: int = 10, seconds: float = 0.3) -> dict:
+        """Press at the start, travel in steps, release at the end."""
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        self._last_mouse_x, self._last_mouse_y = x2, y2
+        if self.input_backends["mouse"] == "wbox-pointer":
+            return self._vptr_op("drag", x1, y1, x2, y2, button, steps, seconds)
+        # xdotool: chain it so the whole drag is one spawn, and so a failure
+        # cannot leave the button down between two processes.
+        steps = max(1, int(steps))
+        args = ["mousemove", str(x1), str(y1), "mousedown", str(button)]
+        delay = str(max(1, int(max(0.0, seconds) / steps * 1000)))
+        for i in range(1, steps + 1):
+            args += ["sleep", str(max(0.0, seconds) / steps),
+                     "mousemove",
+                     str(x1 + (x2 - x1) * i // steps),
+                     str(y1 + (y2 - y1) * i // steps)]
+        args += ["mouseup", str(button)]
+        return self._xdotool(*args, timeout=max(10.0, seconds * 4 + 10))
+
+    def _gesture_transport_conflict(self) -> str | None:
+        """Why a held modifier cannot be combined with a click, if it cannot.
+
+        A modifier held on the Wayland virtual keyboard and a click injected
+        through XTEST live on different seats: the app is handed a bare click,
+        with no error anywhere. `input_backend` accepts a per-function dict,
+        so that pairing is reachable — refuse it by name rather than deliver a
+        ctrl+click that is not one.
+        """
+        kbd, mouse = self.input_backends["keyboard"], self.input_backends["mouse"]
+        kbd_wayland = kbd in ("wbox-keyboard", "wtype")
+        mouse_wayland = mouse == "wbox-pointer"
+        if kbd_wayland != mouse_wayland:
+            return (
+                f"keyboard={kbd} and mouse={mouse} inject through different "
+                "transports, so a held modifier would not reach a click. Use a "
+                "single preset (hybrid, wayland or x11) for this gesture."
+            )
+        return None
+
+    def hold(self, keys: list[str], actions: list[dict]) -> dict:
+        """Hold modifiers, run a sequence, release them whatever happens.
+
+        `actions` are dicts carrying an explicit `type`: `{"type": "key",
+        "key": "tab"}`, `{"type": "click", "x": 4, "y": 3}`,
+        `{"type": "screenshot", "name": "switcher"}`.
+        """
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        if not keys:
+            return {"error": "hold needs at least one modifier"}
+
+        wants_click = any(a.get("type") == "click" for a in actions)
+        if wants_click:
+            conflict = self._gesture_transport_conflict()
+            if conflict:
+                return {"error": f"refused to hold: {conflict}"}
+
+        if self.input_backends["keyboard"] != "wbox-keyboard":
+            return self._hold_xdotool(keys, actions)
+
+        done, shots = [], []
+        try:
+            client = self._vptr_client()
+        except Exception as exc:
+            return {"error": f"wbox-keyboard unavailable: {exc}"}
+        try:
+            with client.modifiers_held(keys):
+                for action in actions:
+                    kind = action.get("type")
+                    if kind == "key":
+                        client.tap(action["key"])
+                    elif kind == "click":
+                        client.click(int(action["x"]), int(action["y"]),
+                                     int(action.get("button", 1)))
+                    elif kind == "screenshot":
+                        shot = self.screenshot(action.get("name"))
+                        if "error" in shot:
+                            return {"error": shot["error"], "done": done}
+                        shots.append(shot.get("path"))
+                    else:
+                        return {"error": f"unknown action type: {kind!r}",
+                                "done": done}
+                    done.append(kind)
+        except (OSError, EOFError, RuntimeError, ValueError, KeyError) as exc:
+            # The modifiers are already released: that happens in the context
+            # manager's finally, before this runs.
+            return {"error": f"hold failed: {exc}", "done": done}
+        return {"ok": True, "held": keys, "done": done,
+                **({"screenshots": shots} if shots else {})}
+
+    @staticmethod
+    def _xdotool_keysym(name: str) -> str:
+        """Normalise a key name the way the Wayland path already does.
+
+        X keysyms are case-sensitive: `Tab` exists, `tab` does not, and
+        xdotool reports no error for the second — it simply sends nothing. The
+        wbox-keyboard path resolves names through the same alias table, so
+        without this the identical hold() call works on hybrid and silently
+        does nothing on x11.
+        """
+        from wbox.pointer import _KEY_ALIASES
+        return _KEY_ALIASES.get(name.lower(), name)
+
+    def _hold_xdotool(self, keys: list[str], actions: list[dict]) -> dict:
+        """The x11 route: keydown, the sequence, keyup — keyup always sent."""
+        # Same reason as click(): an X11 window without focus drops what we
+        # send, and reports nothing.
+        self._focus_active_window()
+        mods = "+".join(keys)
+        down = self._xdotool("keydown", mods)
+        if "error" in down:
+            return down
+        done, shots = [], []
+        try:
+            for action in actions:
+                kind = action.get("type")
+                if kind == "key":
+                    r = self._xdotool("key", "--",
+                                      self._xdotool_keysym(action["key"]))
+                elif kind == "click":
+                    r = self._xdotool("mousemove", str(int(action["x"])),
+                                      str(int(action["y"])), "click",
+                                      str(int(action.get("button", 1))))
+                elif kind == "screenshot":
+                    r = self.screenshot(action.get("name"))
+                    if "error" not in r:
+                        shots.append(r.get("path"))
+                else:
+                    return {"error": f"unknown action type: {kind!r}", "done": done}
+                if "error" in r:
+                    return {"error": r["error"], "done": done}
+                done.append(kind)
+        finally:
+            self._xdotool("keyup", mods)
+        return {"ok": True, "held": keys, "done": done,
+                **({"screenshots": shots} if shots else {})}
+
     # ── Input debugging ────────────────────────────────────────────
 
     def debug_input(self, test_key: str = "a", target: str = "xev") -> dict:

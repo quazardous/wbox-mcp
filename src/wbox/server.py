@@ -446,6 +446,129 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 },
             ),
             Tool(
+                name="scroll",
+                description=(
+                    "Scroll the wheel at (x, y). Negative notches scroll up "
+                    "(or left when horizontal)."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "x": {"type": "integer", "description": "X coordinate"},
+                        "y": {"type": "integer", "description": "Y coordinate"},
+                        "notches": {
+                            "type": "integer",
+                            "description": "Wheel notches; negative scrolls up/left",
+                        },
+                        "horizontal": {
+                            "type": "boolean",
+                            "description": "Scroll sideways instead of vertically",
+                            "default": False,
+                        },
+                    },
+                    "required": ["x", "y", "notches"],
+                },
+            ),
+            Tool(
+                name="dblclick",
+                description="Double-click at (x, y)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "x": {"type": "integer", "description": "X coordinate"},
+                        "y": {"type": "integer", "description": "Y coordinate"},
+                        "button": {
+                            "type": "integer",
+                            "description": "Mouse button (1=left, 2=middle, 3=right)",
+                            "default": 1,
+                        },
+                        "interval": {
+                            "type": "number",
+                            "description": "Seconds between the two clicks",
+                            "default": 0.08,
+                        },
+                    },
+                    "required": ["x", "y"],
+                },
+            ),
+            Tool(
+                name="drag",
+                description=(
+                    "Press at (x1, y1), travel to (x2, y2) in steps, release. "
+                    "The travel is the point: a press and a jump does not "
+                    "produce the motion a resize handle or a text selection "
+                    "watches for."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "x1": {"type": "integer", "description": "Start X"},
+                        "y1": {"type": "integer", "description": "Start Y"},
+                        "x2": {"type": "integer", "description": "End X"},
+                        "y2": {"type": "integer", "description": "End Y"},
+                        "button": {
+                            "type": "integer",
+                            "description": "Mouse button (1=left, 2=middle, 3=right)",
+                            "default": 1,
+                        },
+                        "steps": {
+                            "type": "integer",
+                            "description": "How many motion events along the way",
+                            "default": 10,
+                        },
+                        "seconds": {
+                            "type": "number",
+                            "description": "How long the travel takes",
+                            "default": 0.3,
+                        },
+                    },
+                    "required": ["x1", "y1", "x2", "y2"],
+                },
+            ),
+            Tool(
+                name="hold",
+                description=(
+                    "Hold modifiers down, run a sequence of actions, then "
+                    "release them — the release is guaranteed even if an "
+                    "action fails. This is how to observe a gesture that acts "
+                    "on release, such as an alt-tab switcher, while it is up."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "keys": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Modifiers to hold, e.g. [\"ctrl\"]",
+                        },
+                        "actions": {
+                            "type": "array",
+                            "description": "Actions to run while the modifiers are down",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "type": {
+                                        "type": "string",
+                                        "enum": ["key", "click", "screenshot"],
+                                        "description": "Which kind of action this is",
+                                    },
+                                    "key": {"type": "string", "description": "For type=key"},
+                                    "x": {"type": "integer", "description": "For type=click"},
+                                    "y": {"type": "integer", "description": "For type=click"},
+                                    "button": {"type": "integer", "default": 1},
+                                    "name": {
+                                        "type": "string",
+                                        "description": "For type=screenshot: the file name",
+                                    },
+                                },
+                                "required": ["type"],
+                            },
+                        },
+                    },
+                    "required": ["keys", "actions"],
+                },
+            ),
+            Tool(
                 name="type_text",
                 description="Type text into the focused widget",
                 inputSchema={
@@ -710,6 +833,38 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 ImageContent(type="image", data=img_data, mimeType="image/png"),
                 TextContent(type="text", text=result["path"]),
             ]
+
+        if name == "scroll":
+            result = await asyncio.to_thread(
+                compositor.scroll,
+                arguments["x"], arguments["y"], arguments["notches"],
+                arguments.get("horizontal", False),
+            )
+            return _reply(result)
+
+        if name == "dblclick":
+            result = await asyncio.to_thread(
+                compositor.double_click,
+                arguments["x"], arguments["y"],
+                arguments.get("button", 1), arguments.get("interval", 0.08),
+            )
+            return _reply(result)
+
+        if name == "drag":
+            result = await asyncio.to_thread(
+                compositor.drag,
+                arguments["x1"], arguments["y1"],
+                arguments["x2"], arguments["y2"],
+                arguments.get("button", 1),
+                arguments.get("steps", 10), arguments.get("seconds", 0.3),
+            )
+            return _reply(result)
+
+        if name == "hold":
+            result = await asyncio.to_thread(
+                compositor.hold, arguments["keys"], arguments["actions"],
+            )
+            return _reply(result)
 
         if name == "click":
             result = await asyncio.to_thread(

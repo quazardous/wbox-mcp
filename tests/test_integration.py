@@ -642,6 +642,81 @@ class TestMouseAccuracy:
                 )
 
 
+class TestGestures:
+    """#3127 — wheel, drag, double-click and a held modifier.
+
+    Each test asserts the thing that makes the gesture worth having, not that
+    the call returned ok. A drag that reports success and teleports produces
+    none of the motion a resize handle watches for.
+    """
+
+    def test_drag_travels_instead_of_teleporting(self, harness):
+        """The travel IS the gesture: assert the motion events exist."""
+        h = harness
+        h.mark_log()
+        assert "error" not in h.comp.drag(300, 250, 500, 350, steps=10, seconds=0.3)
+        time.sleep(0.4)
+        stepped = len(h.log_lines("motion"))
+
+        h.mark_log()
+        assert "error" not in h.comp.drag(300, 250, 500, 350, steps=1, seconds=0.0)
+        time.sleep(0.4)
+        instant = len(h.log_lines("motion"))
+
+        # Measured on labwc+hybrid: 11 against 2. Comparing the two rather
+        # than asserting a count keeps this meaningful on a slower backend.
+        assert stepped > instant, (
+            f"a stepped drag produced {stepped} motion events, "
+            f"an instant one {instant}: the travel did not happen"
+        )
+
+    def test_double_click_reads_as_one_gesture(self, harness):
+        """Two clicks arriving is not the same as a double click being read."""
+        h = harness
+        h.mark_log()
+        assert "error" not in h.comp.double_click(400, 300)
+        time.sleep(0.5)
+        assert h.log_lines("dblclick"), (
+            "the app saw no double click — the two clicks may have landed "
+            "too far apart, or too slowly to be one gesture"
+        )
+
+    def test_hold_keeps_the_modifier_down(self, harness):
+        """The whole point: taps inside the hold must carry the modifier.
+
+        key_combo() clears its modifiers when it ends, so composing a hold
+        from it would send bare keys while reporting success. This is the
+        regression that would hide.
+        """
+        h = harness
+        h.mark_log()
+        r = h.comp.hold(["ctrl"], [{"type": "key", "key": "tab"},
+                                   {"type": "key", "key": "tab"}])
+        assert "error" not in r, r
+        time.sleep(0.5)
+        taps = [l for l in h.log_lines("key Tab")]
+        assert taps, "no Tab reached the app"
+        assert all("Ctrl" in l for l in taps), (
+            f"the modifier was not held for every tap: {taps}"
+        )
+
+    def test_hold_releases_when_an_action_fails(self, harness):
+        """The release lives in a finally, so a bad action must not strand it."""
+        h = harness
+        r = h.comp.hold(["ctrl"], [{"type": "nonsense"}])
+        assert "error" in r, "an unknown action type should be refused"
+
+        # If ctrl were still down, this would arrive as Ctrl+a.
+        h.mark_log()
+        assert "error" not in h.comp.key("a")
+        time.sleep(0.4)
+        lines = h.log_lines("key ")
+        assert lines, "no key reached the app after the failed hold"
+        assert not any("Ctrl" in l for l in lines), (
+            f"ctrl was left held after the failed sequence: {lines}"
+        )
+
+
 class TestKeyboard:
     """Verify keyboard input."""
 
