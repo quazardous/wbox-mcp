@@ -19,6 +19,13 @@
   clicks and screenshots, which is the only way to watch a gesture that acts
   on release, such as an alt-tab switcher, while it is still up — and the
   release is guaranteed even when an action in the middle fails.
+  One caveat, on `scroll` alone: it is the one gesture this repository's test
+  app cannot witness — it reports no wheel event, though `xdotool`'s own wheel
+  click is equally silent there, so the witness is the suspect rather than the
+  injection. It ships verified against another project's real application, not
+  by a test here. The other three are covered across every compositor and
+  input backend.
+
   `hold` refuses outright when the keyboard and the mouse inject through
   different transports (reachable with a per-function `input_backend`): a
   modifier held on the Wayland virtual keyboard never reaches a click sent
