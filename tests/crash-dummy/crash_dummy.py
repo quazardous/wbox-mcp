@@ -155,14 +155,23 @@ class CrashDummy:
         # events proves the two clicks arrived, not that anything read them as
         # a double click — only this binding does (#3127).
         self.root.bind("<Double-Button-1>", self._on_double_click)
-        # X11 delivers the wheel as buttons 4/5 (6/7 sideways). The generic
-        # <Button> binding does not see them here — a scrollable child eats
-        # them first — so bind them by number, or a wheel that never arrives
-        # and a wheel that is merely unlogged look the same (#3127).
-        for _n in (4, 5, 6, 7):
-            self.root.bind(f"<Button-{_n}>",
-                           lambda e, n=_n: self._log(
-                               f"wheel button{n} at ({e.x},{e.y})"))
+        # X11 delivers the wheel as buttons 4/5. The generic <Button> binding
+        # does not see them here, so bind them by number — otherwise a wheel
+        # that never arrives and a wheel that is merely unlogged look alike.
+        #
+        # Guarded, and that is the point: Tk rejects a button number it does
+        # not know, and an unguarded bind killed this app during start-up on
+        # the CI runner — every test then failed for want of an app, which
+        # reads as "wbox is broken" rather than "the witness is". An
+        # instrument must never be able to kill what it observes; losing the
+        # wheel witness is an acceptable degradation, losing the app is not.
+        for _n in (4, 5):
+            try:
+                self.root.bind(f"<Button-{_n}>",
+                               lambda e, n=_n: self._log(
+                                   f"wheel button{n} at ({e.x},{e.y})"))
+            except tk.TclError:
+                pass
         self.root.bind("<KeyPress>", self._on_key)
         self.root.bind("<Configure>", self._on_configure)
 
