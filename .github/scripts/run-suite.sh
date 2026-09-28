@@ -26,6 +26,10 @@ import xml.etree.ElementTree as ET
 # intentional resize skip does not look like a regression on day one.
 EXPECTED = (
     "kiosk compositor: resize unsupported",
+    # #3205 — the app sets overrideredirect in fullscreen mode, so it is not a
+    # managed toplevel and no window-management protocol can see it. Nothing
+    # to report, on any compositor.
+    "overrideredirect bypasses the WM",
 )
 
 root = ET.parse("report.xml").getroot()
