@@ -7,6 +7,21 @@
   Format: https://semver.org
 -->
 
+## [Unreleased]
+
+### Fixed
+
+- **Windows: `launch` no longer takes a window that was already open.** A
+  `title_hint` matched any window whose title contained it, a browser tab
+  showing the app's page included, and `kill` then ended that window's
+  process: the browser. Only a window that appears after the launch is
+  taken, and an exact title wins over a partial one.
+- **Windows: probing a process no longer ends it.** Checking that a pid runs
+  used `os.kill(pid, 0)`, which on Windows terminates the process.
+- **Windows: one command per process works** (`wbox_ctl` from a Makefile or a
+  script): `screenshot`, `click` and `kill` find the window a previous
+  `launch` saved, and `kill` ends the launcher too.
+
 ## [0.8.0] - 2026-09-28
 
 ### Added

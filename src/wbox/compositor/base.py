@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import re
 import shutil
 import signal
@@ -26,7 +27,28 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
+def _win32_pid_alive(pid: int) -> bool:
+    """Whether a process runs, on Windows. Not `os.kill(pid, 0)`: there that
+    is TerminateProcess with exit code 0, which ends the process it probes."""
+    import ctypes
+    import ctypes.wintypes as wt
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    try:
+        code = wt.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return code.value == 259  # STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        return _win32_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except (ProcessLookupError, PermissionError):

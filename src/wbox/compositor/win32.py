@@ -21,7 +21,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from .base import CompositorServer
+from .base import CompositorServer, _pid_alive
 
 log = logging.getLogger(__name__)
 
@@ -235,17 +235,43 @@ def find_windows_by_title(title_sub: str) -> list[int]:
     return results
 
 
-def find_window_wait(pid: int, title_hint: str, timeout: float = 10) -> int | None:
-    """Wait for a window to appear. Try PID first, fallback to title."""
+def visible_windows() -> set[int]:
+    """Every top-level visible window, now."""
+    results: set[int] = set()
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
+    def callback(hwnd, _lparam):
+        if IsWindowVisible(hwnd):
+            results.add(hwnd)
+        return True
+
+    EnumWindows(callback, 0)
+    return results
+
+
+def find_window_wait(
+    pid: int,
+    title_hint: str,
+    timeout: float = 10,
+    existing: set[int] | frozenset[int] = frozenset(),
+) -> int | None:
+    """Wait for a window to appear. Try PID first, fallback to title.
+
+    A window in `existing` (open before the launch) is never taken by its
+    title: a browser tab showing the app's page has its name in its title,
+    and `kill` ends the process owning the window found. Among new windows,
+    an exact title wins over one that merely contains the hint.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         windows = find_windows_by_pid(pid)
         if windows:
             return windows[0]
         if title_hint:
-            windows = find_windows_by_title(title_hint)
-            if windows:
-                return windows[0]
+            windows = [w for w in find_windows_by_title(title_hint) if w not in existing]
+            exact = [w for w in windows if get_window_title(w).lower() == title_hint.lower()]
+            if exact or windows:
+                return (exact or windows)[0]
         time.sleep(0.3)
     return None
 
@@ -614,6 +640,7 @@ class Win32Compositor(CompositorServer):
 
         log.info("Launching app: %s", " ".join(app_cmd))
 
+        existing = visible_windows()
         self.state.compositor_proc = subprocess.Popen(
             app_cmd,
             env=env,
@@ -626,7 +653,7 @@ class Win32Compositor(CompositorServer):
 
         # Wait for window
         wnd_timeout = self.timeouts.get("window_discovery", 10)
-        hwnd = find_window_wait(pid, self.title_hint, timeout=wnd_timeout)
+        hwnd = find_window_wait(pid, self.title_hint, timeout=wnd_timeout, existing=existing)
 
         if not hwnd:
             return {
@@ -789,6 +816,11 @@ class Win32Compositor(CompositorServer):
             except Exception as e:
                 log.warning("Failed to kill %s pid=%d: %s", label, pid, e)
 
+        # A fresh process (wbox_ctl, one per command) finds what a previous
+        # launch saved.
+        if not self._hwnd:
+            self.reload_state()
+
         # 1. Get PID from live window handle
         if self._hwnd and IsWindow(self._hwnd):
             real_pid = wt.DWORD()
@@ -807,6 +839,9 @@ class Win32Compositor(CompositorServer):
                 if self.state.compositor_proc.poll() is None:
                     self.state.compositor_proc.kill()
                     killed.append(f"popen(pid={popen_pid})")
+        # …or, launched by a previous process, the pid it saved.
+        elif self.state.compositor_pid and _pid_alive(self.state.compositor_pid):
+            _terminate_pid(self.state.compositor_pid, "launcher")
 
         self._cleanup_state()
         return {"status": "killed", "killed": killed}
@@ -826,6 +861,10 @@ class Win32Compositor(CompositorServer):
     def is_running(self) -> bool:
         # On Windows, some apps (Win11 Notepad, etc.) re-parent to a child process,
         # so the original Popen process may exit while the app window is still alive.
+        # A fresh process (wbox_ctl, one per command) finds the window
+        # a previous launch saved.
+        if not self._hwnd:
+            self.reload_state()
         # Primary check: is the window still valid?
         if self._hwnd and IsWindow(self._hwnd):
             return True
@@ -835,11 +874,7 @@ class Win32Compositor(CompositorServer):
             return self.state.compositor_proc.poll() is None
 
         if self.state.compositor_pid:
-            try:
-                os.kill(self.state.compositor_pid, 0)
-                return True
-            except (ProcessLookupError, PermissionError, OSError):
-                return False
+            return _pid_alive(self.state.compositor_pid)
 
         return False
 
