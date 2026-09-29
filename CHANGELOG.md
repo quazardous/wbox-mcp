@@ -7,6 +7,32 @@
   Format: https://semver.org
 -->
 
+## [Unreleased]
+
+### Added
+
+- **`record` films the display while a gesture plays** (#3228). One
+  screenshot at a time is far too slow to catch a flicker, an animation, or
+  what happens mid-drag. `record` captures for a few seconds — a region films
+  several times faster than the full screen — and `during` plays a drag, a
+  click or a keystroke in step with it, so the film and the gesture need no
+  script to line them up.
+
+  It returns the frames and a summary: how many, the interval actually
+  achieved, and **which frames differ from the one before**. That last one is
+  what makes it a detector rather than a recorder — a value that changes and
+  changes back is a flicker. weston is refused by name: it announces no
+  wlr-screencopy, so there is nothing to capture from.
+
+### Changed
+
+- **A skip in the test suite now means a capability the backend lacks, and
+  nothing else.** A test that gave up — the app would not launch, its window
+  was not found — used to skip, which is indistinguishable from a backend
+  that legitimately cannot do the thing, and reads as green. Those fail now.
+  Skipping a Windows backend on Linux is still right; skipping labwc because
+  labwc is not installed is not, and the suite says so.
+
 ## [0.9.0] - 2026-09-29
 
 ### Added
