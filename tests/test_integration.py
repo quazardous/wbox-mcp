@@ -274,6 +274,26 @@ def _backend_tools_available(backend: str) -> bool:
     return all(shutil.which(t) for t in tools)
 
 
+def _require_backend(compositor: str, backend: str) -> None:
+    """A Linux backend missing on a Linux bench is a failure, not a skip.
+
+    Skipping a Windows backend here is right — the platform does not apply.
+    Skipping labwc because labwc is not installed is different: the bench is
+    incomplete and reports green for tests it never ran. That is how a suite
+    comes to mean less than it looks like it means.
+    """
+    if not _compositor_available(compositor):
+        pytest.fail(
+            f"{compositor} is not installed — this suite tests the Linux "
+            f"backends and cannot report on one it cannot start"
+        )
+    if not _backend_tools_available(backend):
+        pytest.fail(
+            f"the tools for the {backend} input backend are missing — "
+            f"install them, or deselect the combo with -k"
+        )
+
+
 def combo_id(val):
     if isinstance(val, tuple):
         return "-".join(str(v) for v in val)
@@ -288,10 +308,7 @@ def combo_id(val):
 @pytest.fixture(params=COMPOSITOR_BACKENDS, ids=combo_id, scope="module")
 def compositor_backend(request):
     compositor, backend = request.param
-    if not _compositor_available(compositor):
-        pytest.skip(f"{compositor} not installed")
-    if not _backend_tools_available(backend):
-        pytest.skip(f"tools for {backend} backend not available")
+    _require_backend(compositor, backend)
     return compositor, backend
 
 
@@ -307,7 +324,7 @@ def harness(compositor_backend, app_mode):
     result = h.launch()
     if "error" in result:
         h.kill()
-        pytest.skip(f"launch failed: {result['error']}")
+        pytest.fail(f"launch failed: {result['error']}")
     yield h
     h.kill()
 
@@ -321,7 +338,7 @@ def harness_undecorate(compositor_backend):
     result = h.launch()
     if "error" in result:
         h.kill()
-        pytest.skip(f"launch failed: {result['error']}")
+        pytest.fail(f"launch failed: {result['error']}")
     yield h
     h.kill()
 
@@ -334,7 +351,7 @@ def harness_decorate(compositor_backend):
     result = h.launch()
     if "error" in result:
         h.kill()
-        pytest.skip(f"launch failed: {result['error']}")
+        pytest.fail(f"launch failed: {result['error']}")
     yield h
     h.kill()
 
@@ -405,7 +422,7 @@ class TestCrashDummySanity:
     def test_crash_dummy_starts_on_host(self, sanity_display):
         """Launch crash_dummy standalone, verify it logs 'ready'."""
         if not sanity_display:
-            pytest.skip("no DISPLAY available")
+            pytest.fail("no DISPLAY and no Xvfb: the bench cannot run a GUI at all")
         log_path = CRASH_DUMMY_DIR / "log" / "sanity_test.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if log_path.exists():
@@ -442,7 +459,7 @@ class TestCrashDummySanity:
     def test_crash_dummy_fixed_mode(self, sanity_display):
         """Launch crash_dummy in fixed mode, verify non-resizable."""
         if not sanity_display:
-            pytest.skip("no DISPLAY available")
+            pytest.fail("no DISPLAY and no Xvfb: the bench cannot run a GUI at all")
         log_path = CRASH_DUMMY_DIR / "log" / "sanity_fixed.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if log_path.exists():
@@ -473,7 +490,7 @@ class TestCrashDummySanity:
     def test_crash_dummy_popup_signal(self, sanity_display):
         """Launch crash_dummy, send open_popup via FIFO, verify popup opens."""
         if not sanity_display:
-            pytest.skip("no DISPLAY available")
+            pytest.fail("no DISPLAY and no Xvfb: the bench cannot run a GUI at all")
         log_path = CRASH_DUMMY_DIR / "log" / "sanity_popup.log"
         fifo_path = CRASH_DUMMY_DIR / "log" / "sanity_popup.fifo"
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -943,7 +960,7 @@ class TestDecorations:
         # can be hidden by log marking under load).
         h.mark_log()
         if not h.send_cmd("geometry"):
-            pytest.skip("crash_dummy FIFO not available")
+            pytest.fail("crash_dummy did not create its FIFO — the app is not up")
         deadline = time.monotonic() + 3
         geom_lines = []
         while time.monotonic() < deadline and not geom_lines:
@@ -960,17 +977,33 @@ class TestDecorations:
         """With undecorate=False, a WM that decorates should offset the window."""
         compositor, _ = compositor_backend
         h = harness_decorate
-        time.sleep(0.5)
-        # Check window position via xdotool
-        wid = xdotool_display(h.x_display, "search", "--name", "crash dummy")
-        if not wid:
-            pytest.skip("could not find window")
-        wid = wid.splitlines()[0]
-        geom = xdotool_display(h.x_display, "getwindowgeometry", "--shell", wid)
-        info = dict(l.split("=", 1) for l in geom.splitlines() if "=" in l)
-        # With decorations, there should be a title bar offset or the window
-        # shouldn't be at (0,0)
-        assert "WIDTH" in info, f"no geometry found: {geom}"
+
+        # Poll rather than sleep once. A kiosk shell fullscreens the window
+        # asynchronously, so measuring too early catches it at its initial
+        # placement: this test failed a full run at (240, 113), which is
+        # exactly (1280-800)/2 centred — the window before weston moved it,
+        # not a window weston had decorated.
+        info, deadline = {}, time.monotonic() + 5
+        while time.monotonic() < deadline:
+            wid = xdotool_display(h.x_display, "search", "--name", "crash dummy")
+            if wid:
+                geom = xdotool_display(
+                    h.x_display, "getwindowgeometry", "--shell",
+                    wid.splitlines()[0])
+                info = dict(l.split("=", 1)
+                            for l in geom.splitlines() if "=" in l)
+                if "WIDTH" in info:
+                    x, y = int(info.get("X", 0)), int(info.get("Y", 0))
+                    # labwc offsets a decorated window; the kiosk shells put
+                    # it at the origin. Either way, stop as soon as the
+                    # geometry is the settled one.
+                    settled = (x, y) != (0, 0) if compositor == "labwc" \
+                        else (x, y) == (0, 0)
+                    if settled:
+                        break
+            time.sleep(0.2)
+
+        assert "WIDTH" in info, f"the app window never reported a geometry"
         x, y = int(info.get("X", 0)), int(info.get("Y", 0))
         # Assert the actual decoration behaviour, not merely that geometry
         # exists — the latter passed everywhere and tested nothing.
@@ -995,17 +1028,14 @@ class TestResize:
     def test_resize_normal_mode(self, compositor_backend):
         """Normal mode app should accept resize."""
         compositor, backend = compositor_backend
-        if not _compositor_available(compositor):
-            pytest.skip(f"{compositor} not installed")
-        if not _backend_tools_available(backend):
-            pytest.skip(f"tools for {backend} not available")
+        _require_backend(compositor, backend)
 
         h = WboxTestHarness(compositor, backend, "normal",
                             undecorate=False, screen="800x600", tag="resize")
         result = h.launch()
         if "error" in result:
             h.kill()
-            pytest.skip(f"launch failed: {result['error']}")
+            pytest.fail(f"launch failed: {result['error']}")
         try:
             time.sleep(0.5)
             # Resize via compositor
@@ -1037,23 +1067,20 @@ class TestResize:
     def test_fixed_mode_no_resize(self, compositor_backend):
         """Fixed mode app sets min=max size hints — should resist resize."""
         compositor, backend = compositor_backend
-        if not _compositor_available(compositor):
-            pytest.skip(f"{compositor} not installed")
-        if not _backend_tools_available(backend):
-            pytest.skip(f"tools for {backend} not available")
+        _require_backend(compositor, backend)
 
         h = WboxTestHarness(compositor, backend, "fixed",
                             undecorate=False, screen="800x600", tag="resize")
         result = h.launch()
         if "error" in result:
             h.kill()
-            pytest.skip(f"launch failed: {result['error']}")
+            pytest.fail(f"launch failed: {result['error']}")
         try:
             time.sleep(0.5)
             # Get initial size
             wid = xdotool_display(h.x_display, "search", "--name", "crash dummy")
             if not wid:
-                pytest.skip("could not find window")
+                pytest.fail("the app window was not found on the nested display")
             wid = wid.splitlines()[0]
             geom_before = xdotool_display(
                 h.x_display, "getwindowgeometry", "--shell", wid)
@@ -1093,7 +1120,7 @@ class TestPopup:
     def test_popup_via_signal(self, harness):
         """open_popup command should open popup, verify its geometry in log."""
         if not harness.send_cmd("open_popup"):
-            pytest.skip("crash_dummy FIFO not available")
+            pytest.fail("crash_dummy did not create its FIFO — the app is not up")
         time.sleep(1)
 
         popup_lines = harness.log_lines("popup_opened")
@@ -1110,17 +1137,17 @@ class TestPopup:
     def test_popup_click(self, harness):
         """Open popup via FIFO command, click inside it, verify in log."""
         if not harness.send_cmd("open_popup"):
-            pytest.skip("crash_dummy FIFO not available")
+            pytest.fail("crash_dummy did not create its FIFO — the app is not up")
         time.sleep(1)
 
         # Get popup position from log
         geom_lines = harness.log_lines("popup_geometry")
         if not geom_lines:
-            pytest.skip("popup geometry not logged")
+            pytest.fail("the popup logged no geometry — it may not have opened")
         pos = parse_window_pos(geom_lines[-1])
         size = parse_window_size(geom_lines[-1])
         if not pos or not size:
-            pytest.skip("could not parse popup geometry")
+            pytest.fail("the popup geometry line could not be parsed")
 
         # Click in the center of the popup
         cx = pos[0] + size[0] // 2
@@ -1136,7 +1163,7 @@ class TestPopup:
     def test_popup_close_signal(self, harness):
         """close_popup command should close the popup."""
         if not harness.send_cmd("open_popup"):
-            pytest.skip("crash_dummy FIFO not available")
+            pytest.fail("crash_dummy did not create its FIFO — the app is not up")
         time.sleep(0.5)
         harness.send_cmd("close_popup")
         time.sleep(0.5)
