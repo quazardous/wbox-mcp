@@ -1260,6 +1260,11 @@ class Win32Compositor(CompositorServer):
                 done.append(kind)
         finally:
             self._send_mouse(*[_make_keyboard_input(vk, flags=KEYEVENTF_KEYUP) for vk in reversed(held)])
+            # The release goes through the input queue, but a key wbox posts
+            # next is served before it: without this pause the app read
+            # that key with the modifier still down (measured on CI's runner:
+            # `a` right after a failed ctrl hold arrived as ctrl+a).
+            time.sleep(0.15)
         return {"ok": True, "held": keys, "done": done, **({"screenshots": shots} if shots else {})}
 
     # ── Recording ────────────────────────────────────────────────
