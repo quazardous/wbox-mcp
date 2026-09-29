@@ -119,7 +119,14 @@ class CrashDummy:
         self.text_label = ttk.Label(self.root, text="Type here (tests type_text / key):",
                   style="Info.TLabel")
         self.text_label.pack(anchor="w", padx=15, pady=(10, 2))
+        # insertofftime=0 keeps the caret solid instead of blinking. A
+        # blinking caret makes every frame-differencing test flaky: once a
+        # click gives this widget the focus, an otherwise still screen
+        # reports a change twice a second, and #3228's flicker detector
+        # cannot tell that from a real flicker. Measured: 0 changes over 2s
+        # without a prior click, 5 with one.
         self.text_area = tk.Text(self.root, height=4, font=("monospace", 12),
+                                 insertofftime=0,
                                   bg="#313244", fg="#cdd6f4",
                                   insertbackground="#f5e0dc", bd=1,
                                   relief="solid")

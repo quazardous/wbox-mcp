@@ -471,6 +471,56 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 },
             ),
             Tool(
+                name="record",
+                description=(
+                    "Film the display for a few seconds, optionally while a "
+                    "gesture plays. One screenshot at a time is too slow to "
+                    "see a flicker, an animation, or what happens mid-drag. "
+                    "Returns the frames and a summary saying which of them "
+                    "differ from the one before."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "seconds": {
+                            "type": "number",
+                            "description": "How long to film",
+                        },
+                        "region": {
+                            "type": "string",
+                            "description": (
+                                "Sub-rectangle as 'x,y WxH'. A region films "
+                                "several times faster than the full screen."
+                            ),
+                        },
+                        "fps": {
+                            "type": "number",
+                            "description": "Cap the rate; omit to go as fast as it can",
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "Folder name for the frames",
+                        },
+                        "during": {
+                            "type": "object",
+                            "description": (
+                                "A gesture played while filming, so the two "
+                                "need no script to align them."
+                            ),
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": ["drag", "click", "scroll", "key",
+                                             "type_text"],
+                                },
+                            },
+                            "required": ["type"],
+                        },
+                    },
+                    "required": ["seconds"],
+                },
+            ),
+            Tool(
                 name="scroll",
                 description=(
                     "Scroll the wheel at (x, y). Negative notches scroll up "
@@ -858,6 +908,15 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 ImageContent(type="image", data=img_data, mimeType="image/png"),
                 TextContent(type="text", text=result["path"]),
             ]
+
+        if name == "record":
+            result = await asyncio.to_thread(
+                compositor.record,
+                arguments["seconds"], arguments.get("region"),
+                arguments.get("fps"), arguments.get("name"),
+                arguments.get("during"),
+            )
+            return _reply(result)
 
         if name == "scroll":
             result = await asyncio.to_thread(

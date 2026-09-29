@@ -19,6 +19,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import threading
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -623,6 +624,152 @@ class CompositorServer:
         if result.returncode != 0:
             return {"error": f"grim failed: {result.stderr.strip()}"}
         return {"path": str(out_path), "size": out_path.stat().st_size}
+
+    # ── Recording (#3228) ──────────────────────────────────────────
+
+    def record(self, seconds: float, region: str | None = None,
+               fps: float | None = None, name: str | None = None,
+               during: dict | None = None) -> dict:
+        """Film the display for `seconds`, optionally while a gesture plays.
+
+        One `screenshot` at a time is too slow to see a flicker, an animation
+        or what happens mid-drag. A loop of grim captures is fast enough:
+        measured headless on labwc, ~16ms for a 300x200 region (60/s) and
+        ~37ms full screen (27/s). `fps` caps the rate; left out, it captures
+        as fast as it can.
+
+        `during` plays a gesture in a thread while the capture runs, so the
+        film and the gesture need no script to align them:
+        `{"type": "drag", "x1":.., "y1":.., "x2":.., "y2":.., "seconds":..}`,
+        or "click", "key", "type_text", "scroll".
+
+        Returns the frame paths and a summary: how many frames, the interval
+        actually achieved, and which frames differ from the one before. A
+        value that changes and changes back is a flicker.
+        """
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        if seconds <= 0:
+            return {"error": "seconds must be positive"}
+        if self.compositor_name == "weston":
+            # The loop captures with grim, which needs wlr-screencopy. weston
+            # does not expose it — its own screenshots go through
+            # weston-screenshooter, one frame at a time and no region. Saying
+            # so beats a run of "grim failed" for every frame.
+            return {"error": (
+                "record needs wlr-screencopy, which weston does not expose; "
+                "use labwc or cage, or take screenshots one at a time"
+            )}
+
+        frames_dir = (self.state.screenshot_dir or Path(".")) / (
+            name or f"record_{int(time.time())}")
+        try:
+            frames_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return {"error": f"cannot create {frames_dir}: {exc}"}
+
+        env = os.environ.copy()
+        env["WAYLAND_DISPLAY"] = self.state.wayland_display
+        base_cmd = ["grim"] + (["-g", region] if region else [])
+        min_interval = (1.0 / fps) if fps and fps > 0 else 0.0
+
+        gesture_error: list[str] = []
+        thread = None
+        if during:
+            thread = threading.Thread(
+                target=self._play_during, args=(during, gesture_error),
+                daemon=True,
+            )
+
+        frames, stamps = [], []
+        started = time.monotonic()
+        if thread:
+            thread.start()
+        try:
+            while time.monotonic() - started < seconds:
+                loop_start = time.monotonic()
+                path = frames_dir / f"frame_{len(frames):05d}.png"
+                result = self._run_cmd(base_cmd + [str(path)], env=env, timeout=10)
+                if result.returncode != 0:
+                    return {"error": f"grim failed: {result.stderr.strip()}",
+                            "frames": len(frames)}
+                frames.append(path)
+                stamps.append(loop_start - started)
+                if min_interval:
+                    remaining = min_interval - (time.monotonic() - loop_start)
+                    if remaining > 0:
+                        time.sleep(remaining)
+        finally:
+            if thread:
+                thread.join(timeout=max(5.0, seconds))
+
+        return {
+            "frames_dir": str(frames_dir),
+            "frames": len(frames),
+            **self._record_summary(frames, stamps, time.monotonic() - started),
+            **({"during_error": gesture_error[0]} if gesture_error else {}),
+        }
+
+    def _play_during(self, during: dict, errors: list) -> None:
+        """Run one gesture, recording its error rather than raising it.
+
+        It runs in a thread, where an exception would be lost: the caller
+        would get a film of nothing happening and no reason why.
+        """
+        kind = during.get("type")
+        try:
+            if kind == "drag":
+                r = self.drag(during["x1"], during["y1"], during["x2"],
+                              during["y2"], during.get("button", 1),
+                              during.get("steps", 10), during.get("seconds", 0.3))
+            elif kind == "click":
+                r = self.click(during["x"], during["y"], during.get("button", 1))
+            elif kind == "scroll":
+                r = self.scroll(during["x"], during["y"], during["notches"],
+                                during.get("horizontal", False))
+            elif kind == "key":
+                r = self.key(during["key"])
+            elif kind == "type_text":
+                r = self.type_text(during["text"], during.get("delay_ms", 12))
+            else:
+                r = {"error": f"unknown during type: {kind!r}"}
+        except Exception as exc:  # a thread swallows anything else
+            r = {"error": f"{kind} raised: {exc}"}
+        if isinstance(r, dict) and "error" in r:
+            errors.append(r["error"])
+
+    @staticmethod
+    def _record_summary(frames: list, stamps: list, elapsed: float) -> dict:
+        """What the frames say, without reading a single pixel.
+
+        Identical PNG bytes mean an identical frame, so a byte comparison
+        answers "which frames differ from the one before" with no image
+        library to depend on. It cannot say WHAT changed — that is the
+        caller's job, with PIL or an eye — but it says WHEN, which is what
+        turns a pile of frames into a flicker report.
+        """
+        if not frames:
+            return {"seconds": round(elapsed, 3)}
+        intervals = [round(b - a, 4) for a, b in zip(stamps, stamps[1:])]
+        changed = []
+        previous = None
+        for i, path in enumerate(frames):
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            if previous is not None and data != previous:
+                changed.append(i)
+            previous = data
+        return {
+            "seconds": round(elapsed, 3),
+            "fps": round(len(frames) / elapsed, 1) if elapsed else None,
+            "interval_median_ms": (
+                round(sorted(intervals)[len(intervals) // 2] * 1000, 1)
+                if intervals else None),
+            "changed_frames": changed,
+            "changes": len(changed),
+        }
 
     # ── Input injection ─────────────────────────────────────────────
 

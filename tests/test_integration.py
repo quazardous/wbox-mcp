@@ -642,6 +642,71 @@ class TestMouseAccuracy:
                 )
 
 
+class TestRecord:
+    """#3228 — film a region while a gesture plays.
+
+    The pair that matters is silence and noise: a still screen must report
+    zero changed frames, and a drag must report some. A detector that always
+    says "something moved" detects nothing.
+    """
+
+    @staticmethod
+    def _record_or_skip(comp, compositor, *args, **kwargs):
+        """Record, or skip naming weston — the one that cannot.
+
+        record captures with grim, which needs wlr-screencopy; weston does
+        not expose it. Naming it means a different compositor losing the
+        capability fails here instead of hiding behind this skip.
+        """
+        r = comp.record(*args, **kwargs)
+        if "error" in r and "wlr-screencopy" in r["error"]:
+            assert compositor == "weston", (
+                f"{compositor} cannot record: {r['error']}"
+            )
+            pytest.skip("weston: no wlr-screencopy, record is unavailable")
+        return r
+
+    def test_a_still_screen_reports_no_change(self, harness):
+        r = self._record_or_skip(harness.comp, harness.compositor, 1.0,
+                                 name="idle")
+        assert "error" not in r, r
+        assert r["frames"] > 5, f"too few frames to judge: {r}"
+        assert r["changes"] == 0, (
+            f"a still screen produced {r['changes']} changed frames — the "
+            f"detector fires on nothing: {r['changed_frames'][:10]}"
+        )
+
+    def test_a_drag_shows_up_in_the_frames(self, harness):
+        r = self._record_or_skip(
+            harness.comp, harness.compositor, 1.5, name="drag",
+            during={"type": "drag", "x1": 200, "y1": 200, "x2": 600,
+                    "y2": 400, "steps": 15, "seconds": 1.2},
+        )
+        assert "error" not in r, r
+        assert "during_error" not in r, r["during_error"]
+        assert r["changes"] > 0, (
+            f"a drag ran for 1.2s and no frame differed from its neighbour: {r}"
+        )
+
+    def test_fps_caps_the_rate(self, harness):
+        r = self._record_or_skip(harness.comp, harness.compositor, 1.0,
+                                 region="100,100 300x200", fps=10,
+                                 name="capped")
+        assert "error" not in r, r
+        # Uncapped this region runs at 60/s here, so a cap that does nothing
+        # would be obvious.
+        assert r["frames"] <= 13, f"fps=10 over 1s produced {r['frames']} frames"
+
+    def test_a_bad_gesture_is_reported_not_swallowed(self, harness):
+        """The gesture runs in a thread, where an exception would vanish."""
+        r = self._record_or_skip(harness.comp, harness.compositor, 0.5,
+                                 name="bad", during={"type": "nonsense"})
+        assert "error" not in r, r
+        assert "during_error" in r, (
+            f"an unknown gesture ran silently and the film shows nothing: {r}"
+        )
+
+
 class TestWindowState:
     """#3205 — which window has the focus, readable by a test.
 
