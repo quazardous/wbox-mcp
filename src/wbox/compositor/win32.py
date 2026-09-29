@@ -1597,18 +1597,23 @@ class Win32Compositor(CompositorServer):
         if not self.is_running():
             return {"error": "app is not running"}
 
-        # Adjust for non-client area (title bar, borders)
-        rect = wt.RECT(0, 0, width, height)
-        style = user32.GetWindowLongW(self._hwnd, -16)  # GWL_STYLE
-        ex_style = user32.GetWindowLongW(self._hwnd, -20)  # GWL_EXSTYLE
-        has_menu = user32.GetMenu(self._hwnd) != 0
-        user32.AdjustWindowRectEx(ctypes.byref(rect), style, has_menu, ex_style)
-
-        full_w = rect.right - rect.left
-        full_h = rect.bottom - rect.top
-
-        SetWindowPos(self._hwnd, 0, 0, 0, full_w, full_h, SWP_NOMOVE | SWP_NOZORDER)
-        return {"ok": True, "client_width": width, "client_height": height}
+        # The frame (title bar, borders) is measured, not computed: computing
+        # it (AdjustWindowRectEx) takes no DPI and came out a couple of pixels
+        # off under display scaling. One more pass settles what the window
+        # adjusted by itself (a menu bar wrapping, a minimum size).
+        for _ in range(2):
+            size = self.get_size()
+            if (size["client_width"], size["client_height"]) == (width, height):
+                break
+            full_w = width + size["window_width"] - size["client_width"]
+            full_h = height + size["window_height"] - size["client_height"]
+            SetWindowPos(self._hwnd, 0, 0, 0, full_w, full_h, SWP_NOMOVE | SWP_NOZORDER)
+            time.sleep(0.1)
+        size = self.get_size()
+        result = {"ok": True, "client_width": size["client_width"], "client_height": size["client_height"]}
+        if (size["client_width"], size["client_height"]) != (width, height):
+            result["note"] = "the window chose another size (a minimum, or a fixed size)"
+        return result
 
     # ── Clipboard ────────────────────────────────────────────────
 

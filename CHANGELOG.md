@@ -26,6 +26,10 @@
   focus (`activated`), and whether each is maximized or minimized, as on
   Linux; `focus_window` says so when Windows refuses to bring a window
   forward.
+- **Windows: `resize` gives the size asked, to the pixel.** Under display
+  scaling the window's frame was computed at the wrong DPI, and the client
+  area came out a couple of pixels short (900×650 gave 898×648). The frame
+  is now measured, and the answer is the size the window really took.
 - **`screenshot` makes its folder** when `screenshot_dir` does not exist
   yet, instead of failing — found by the first Windows CI run.
 

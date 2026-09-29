@@ -271,7 +271,7 @@ scaling**, CPython 3.12, against a Tk test app and Win11 Notepad.
 | `key` without modifiers | ✅ without taking focus |
 | `keys`, `clipboard_read`, `clipboard_write`, `get_size` | ✅ |
 | `screenshot` of a minimized window | ⚠️ returns a blank image, not an error |
-| `resize` | ⚠️ off by a couple of pixels (900×650 → 898×648) |
+| `resize` | ✅ the client area exactly the size asked, at 150 % |
 | `screenshot(scale=…)`, `screenshot(region=…)` | ❌ returns an error |
 | `list_windows` (with `activated`, `maximized`, `minimized`), `focus_window` | ✅ |
 | `headless` | ✅ with `sandbox:` (the sandbox's window minimized), ❌ ignored without |
@@ -313,9 +313,6 @@ Posted messages to it *report success and are discarded*, so a click can
 return `{"ok": true}` having done nothing; `SendInput` mouse events are dropped;
 keyboard input may still get through. Run wbox elevated too if you must target
 an elevated app. (Derived from documented Windows behaviour; not measured.)
-
-**`resize` is off by a few pixels** under display scaling: the frame size is
-computed at the wrong DPI.
 
 ## Troubleshooting
 
