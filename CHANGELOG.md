@@ -7,7 +7,7 @@
   Format: https://semver.org
 -->
 
-## [Unreleased]
+## [0.10.0] - 2026-09-29
 
 ### Added
 
