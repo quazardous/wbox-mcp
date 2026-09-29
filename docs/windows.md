@@ -273,7 +273,7 @@ scaling**, CPython 3.12, against a Tk test app and Win11 Notepad.
 | `screenshot` of a minimized window | ⚠️ returns a blank image, not an error |
 | `resize` | ⚠️ off by a couple of pixels (900×650 → 898×648) |
 | `screenshot(scale=…)`, `screenshot(region=…)` | ❌ returns an error |
-| `list_windows`, `focus_window` | ❌ return nothing |
+| `list_windows` (with `activated`, `maximized`, `minimized`), `focus_window` | ✅ |
 | `headless` | ✅ with `sandbox:` (the sandbox's window minimized), ❌ ignored without |
 | `screen` | ❌ ignored |
 | Isolation from your desktop | ✅ with `sandbox:`, ❌ none without |
@@ -313,10 +313,6 @@ Posted messages to it *report success and are discarded*, so a click can
 return `{"ok": true}` having done nothing; `SendInput` mouse events are dropped;
 keyboard input may still get through. Run wbox elevated too if you must target
 an elevated app. (Derived from documented Windows behaviour; not measured.)
-
-**`list_windows` and `focus_window` return nothing** when the app hands its
-window to another process, which is common. They look the window up by the
-process wbox started rather than the one that owns the window.
 
 **`resize` is off by a few pixels** under display scaling: the frame size is
 computed at the wrong DPI.

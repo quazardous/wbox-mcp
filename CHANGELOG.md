@@ -19,6 +19,13 @@
 
 ### Fixed
 
+- **Windows: `list_windows` and `focus_window` work.** They looked the
+  windows up by the process wbox started, and many apps hand their window
+  to another one: they found nothing. They now also look by the process
+  that owns the app's window. `list_windows` says which window has the
+  focus (`activated`), and whether each is maximized or minimized, as on
+  Linux; `focus_window` says so when Windows refuses to bring a window
+  forward.
 - **`screenshot` makes its folder** when `screenshot_dir` does not exist
   yet, instead of failing — found by the first Windows CI run.
 

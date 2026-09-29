@@ -1521,33 +1521,55 @@ class Win32Compositor(CompositorServer):
 
     # ── Window management ────────────────────────────────────────
 
+    def _app_windows(self) -> list[int]:
+        """The app's visible top-level windows. By the process that owns the
+        window found at launch as well as the one started: many apps hand
+        their window to another process (Win11 Notepad does), and looking
+        by the started one alone found nothing."""
+        pids = {self.state.app_pid, self._window_pid}
+        if self._hwnd and IsWindow(self._hwnd):
+            owner = wt.DWORD()
+            GetWindowThreadProcessId(self._hwnd, ctypes.byref(owner))
+            pids.add(owner.value)
+        windows: list[int] = []
+        for pid in pids - {0}:
+            windows += [h for h in find_windows_by_pid(pid) if h not in windows]
+        return windows
+
     def list_windows(self) -> dict:
-        """List visible top-level windows of the app process."""
+        """The app's windows, with which one has the focus (`activated`) and
+        whether each is maximized or minimized — the shape Linux reports."""
         if not self.is_running():
             return {"error": "app is not running"}
-        windows = []
-        for hwnd in find_windows_by_pid(self.state.app_pid):
-            windows.append({
-                "app_id": get_class_name(hwnd),
-                "title": get_window_title(hwnd),
-            })
-        return {"windows": windows}
+        front = user32.GetForegroundWindow()
+        return {"windows": [{
+            "app_id": get_class_name(hwnd),
+            "title": get_window_title(hwnd),
+            "activated": hwnd == front,
+            "maximized": bool(user32.IsZoomed(hwnd)),
+            "minimized": bool(user32.IsIconic(hwnd)),
+        } for hwnd in self._app_windows()]}
 
     def focus_window(self, title: str = "", app_id: str = "") -> dict:
-        """Focus/raise a window by title substring (app_id matches class name)."""
+        """Bring the app's window whose title (or class, for app_id) contains
+        the text to the front; an error when Windows refuses."""
         if not self.is_running():
             return {"error": "app is not running"}
         if not title and not app_id:
             return {"error": "provide title or app_id"}
-        for hwnd in find_windows_by_pid(self.state.app_pid):
+        for hwnd in self._app_windows():
             if title and title.lower() in get_window_title(hwnd).lower():
                 pass
             elif app_id and app_id.lower() in get_class_name(hwnd).lower():
                 pass
             else:
                 continue
-            SetForegroundWindow(hwnd)
-            self._hwnd = hwnd
+            previous, self._hwnd = self._hwnd, hwnd
+            if not self._bring_to_foreground():
+                self._hwnd = previous
+                fg = user32.GetForegroundWindow()
+                return {"error": "Windows refused to bring the window to the front",
+                        "in_front": get_window_title(fg) or hex(fg)}
             return {"ok": True, "hwnd": hex(hwnd)}
         return {"error": f"no window matching title={title!r} app_id={app_id!r}"}
 

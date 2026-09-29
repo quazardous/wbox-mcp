@@ -166,6 +166,37 @@ class TestGestures:
         assert lines and not any("Ctrl" in l for l in lines), lines
 
 
+class TestWindows:
+    """list_windows and focus_window: which window has the focus, readable,
+    and settable."""
+
+    def test_the_app_window_is_listed_and_active(self, harness):
+        assert "error" not in harness.comp.click(400, 280)
+        windows = harness.comp.list_windows()["windows"]
+        mine = [w for w in windows if w["title"] == TITLE]
+        assert mine, windows
+        assert mine[0]["activated"] is True, windows
+        assert mine[0]["minimized"] is False
+
+    def test_focus_moves_between_the_apps_windows(self, harness):
+        harness.send("open_popup")
+        assert harness.wait_line("popup_opened"), harness.lines()
+        time.sleep(0.5)
+        try:
+            titles = [w["title"] for w in harness.comp.list_windows()["windows"]]
+            assert "crash dummy popup" in titles, titles
+            assert "error" not in harness.comp.focus_window(title="popup")
+            active = [w["title"] for w in harness.comp.list_windows()["windows"] if w["activated"]]
+            assert active == ["crash dummy popup"], active
+            assert "error" not in harness.comp.focus_window(title=TITLE)
+            active = [w["title"] for w in harness.comp.list_windows()["windows"] if w["activated"]]
+            assert active == [TITLE], active
+        finally:
+            harness.send("close_popup")
+            time.sleep(0.3)
+            harness.comp.focus_window(title=TITLE)
+
+
 class TestClipboard:
     def test_write_then_read(self, harness):
         text = f"wbox {harness.where} {time.time_ns()}"
