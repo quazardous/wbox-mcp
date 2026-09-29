@@ -1111,7 +1111,12 @@ class Win32Compositor(CompositorServer):
             log.info("Using SendInput click (no child HWND or modal visible) at (%d, %d)", x, y)
             return self._sendinput_click(x, y, button)
 
-        # PostMessage path — background click to a specific child HWND
+        # PostMessage path — background click to a specific child HWND.
+        # The coordinates stay physical, whatever the target's DPI awareness:
+        # Windows scales a posted mouse message to a DPI-unaware window by
+        # the sender's own awareness. Converting them to the target's logical
+        # pixels first scales them twice (measured at 150 %: a click aimed at
+        # (60,40) arrived at (40,27)). test_windows_density.py holds this.
         target = child_at_point(self._hwnd, cx, cy)
         tx, ty = map_to_child(self._hwnd, target, cx, cy)
 

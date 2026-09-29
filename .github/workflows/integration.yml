@@ -86,11 +86,52 @@ jobs:
         run: |
           .github/scripts/run-suite.sh
 
+      # Platform-free: the Windows Sandbox mode's channel and config.
+      - name: Sandbox channel
+        run: python -m pytest tests/test_sandbox_channel.py -v
+
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: wbox-logs
           path: tests/crash-dummy/log/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  windows:
+    name: win32 (desktop) + sandbox channel
+    runs-on: windows-latest
+    # Advisory, as the job above: the runner's desktop is new ground.
+    continue-on-error: true
+    timeout-minutes: 20
+
+    env:
+      # The runner's desktop is nobody's: the tests may move its pointer.
+      WBOX_TEST_DESKTOP: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install wbox
+        run: pip install -e ".[test]"
+
+      # The Windows Sandbox mode's plumbing (the channel, the .wsb, the
+      # forwarded calls) runs anywhere. The sandbox itself does not: a hosted
+      # runner has no Windows Sandbox, so test_windows.py's sandbox tests
+      # skip here and run on a developer's machine.
+      - name: Sandbox channel and the win32 backend on the desktop
+        run: python -m pytest tests/test_sandbox_channel.py tests/test_windows.py tests/test_windows_density.py -v -rs
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wbox-windows-logs
+          path: ${{ runner.temp }}/wbox_*
           retention-days: 7
           if-no-files-found: ignore

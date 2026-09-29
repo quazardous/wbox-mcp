@@ -50,6 +50,18 @@ def build_compositor(cfg: dict) -> CompositorServer:
     headless = bool(cfg.get("headless", cfg.get("quiet", False)))
     clipboard_bridge = bool(cfg.get("clipboard_bridge", True))
 
+    if backend == "win32" and cfg.get("sandbox"):
+        # The same backend, in Windows Sandbox (compositor/wsb.py).
+        from .compositor.wsb import SandboxCompositor
+        return SandboxCompositor(
+            screen=screen,
+            instance_name=instance_name,
+            timeouts=timeouts,
+            title_hint=cfg.get("title_hint", ""),
+            sandbox=cfg["sandbox"] if isinstance(cfg["sandbox"], dict) else {},
+            config_dir=cfg.get("_config_dir", "."),
+            headless=headless,
+        )
     if backend == "win32":
         from .compositor.win32 import Win32Compositor
         return Win32Compositor(
@@ -103,7 +115,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
 _COMPOSITOR_KEYS = (
     "compositor", "screen", "name", "timeouts", "input_backend", "undecorate",
     "keyboard_layout", "clipboard_bridge", "title_hint",
-    "weston_shell", "weston_backend",
+    "weston_shell", "weston_backend", "sandbox",
 )
 
 
@@ -155,7 +167,20 @@ def _build_app_cmd(cfg: dict) -> list[str]:
         return []
     if isinstance(command, list):
         return command
+    if sys.platform == "win32" or cfg.get("compositor") == "win32":
+        return split_windows_command(command)
     return shlex.split(command)
+
+
+def split_windows_command(command: str) -> list[str]:
+    """A command line split as Windows programs split theirs.
+
+    shlex's POSIX rules take a backslash for an escape: 'C:\\app\\app.exe'
+    became 'C:appapp.exe', so no Windows path written the usual way ever ran.
+    Here a backslash is a path separator, double quotes group, and the quotes
+    themselves are dropped."""
+    return [part[1:-1] if len(part) > 1 and part[0] == part[-1] == '"' else part
+            for part in shlex.split(command, posix=False)]
 
 
 def _build_app_env(cfg: dict) -> dict[str, str]:

@@ -17,8 +17,77 @@ that never touches your clipboard, and clicks that are pixel-accurate. It does
 - most clicks move your real mouse cursor and bring the window to the front;
 - `headless: true` is ignored — the window is always on your desktop.
 
-If you need the app sandboxed, you need the Linux path. If you want to drive a
-Windows app on the machine you are sitting at, read on.
+**Unless you add `sandbox:`**: the app then runs in Windows Sandbox, a
+throwaway Windows of its own, and none of the above touches you — see
+[Isolation: Windows Sandbox](#isolation-windows-sandbox).
+
+## Isolation: Windows Sandbox
+
+```yaml
+compositor: win32
+title_hint: "My App"
+sandbox:
+  mounts:
+    - {host: ./build, guest: 'C:\app', readonly: true}
+app:
+  command: 'C:\app\myapp.exe'
+```
+
+With `sandbox:`, wbox starts [Windows
+Sandbox](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/),
+runs its win32 backend inside it, and drives the app there. The pointer it
+moves, the keys it presses, the clipboard it writes are the sandbox's. The
+tools and their answers are the same; the app's paths are the sandbox's.
+
+What the sandbox gets from the host, and nothing else:
+
+| In the sandbox | What | Access |
+|---|---|---|
+| `C:\wbox\python` | the Python running wbox | read-only |
+| `C:\wbox\site`, `C:\wbox\src` | wbox and its dependencies | read-only |
+| `C:\wbox\io` | the channel: requests, answers, screenshots | read-write |
+| your `mounts` | the app, its data | read-only unless `readonly: false` |
+
+Nothing is installed in the sandbox: it boots and shows the app in about 15
+seconds. It has no network and no clipboard shared with yours.
+
+| Key | Default | |
+|---|---|---|
+| `mounts` | none | `{host, guest, readonly}`; `host` relative to config.yaml |
+| `networking` | `false` | the app gets a network (through the host) |
+| `vgpu` | `true` | `false` renders in software (WARP) |
+| `memory_mb` | Windows' | the sandbox's memory |
+| `keep` | `false` | `kill`/`stop` leave the sandbox up, and the next `launch` reuses it, with no boot |
+| `boot_timeout` | `180` | seconds to boot and answer |
+
+`headless: true` minimizes the sandbox's window: the app keeps running, and
+screenshots and input keep working (measured). The window itself cannot go: a
+sandbox started without one (`wsb start`) has no logged-on session, and
+nothing runs in it.
+
+Windows Sandbox needs Windows 10/11 **Pro, Enterprise or Education**, turned
+on once — `setup.ps1` does it, asking for admin rights — then a **reboot**.
+Windows runs **one sandbox at a time**: `launch` refuses while another is
+open, and `kill` only ever closes the sandbox wbox started.
+
+**The sandbox is a fresh Windows**: nothing you installed is in it. Notably
+no Visual C++ Redistributable — no `vcruntime140.dll` — so a program built
+against it does not even start there (`no window found`, and nothing in its
+log). Build it with the C runtime linked in (Rust: `-C
+target-feature=+crt-static`; C/C++: `/MT`), or mount what it needs.
+
+The sandbox's display density is your screen's: Windows Sandbox passes it on,
+and it cannot be changed from inside (tried: the display settings API, the
+registry, compatibility layers on the sandbox's client).
+
+How it works: the sandbox's logon starts wbox's agent (`wbox.sandbox_agent`),
+which drives the app with the same win32 backend as on the desktop; the host
+sends it each call through `C:\wbox\io`. The requests are lines appended to
+one file, the answers files of their own: a mapped folder is a network share
+to the sandbox, which learns of a new file only seconds later but reads a file
+it knows afresh — so a call takes a few tens of milliseconds, not five
+seconds. Closing the sandbox's window ends it, with no dialog; turning
+Windows off from inside would leave one on your desktop.
 
 ## Install
 
@@ -29,6 +98,17 @@ irm https://raw.githubusercontent.com/quazardous/wbox-mcp/main/setup.ps1 | iex
 It installs whatever is missing: `uv`, `git`, and Python. For Python it tries
 `winget` first and falls back to a copy managed by uv, which needs no admin
 rights — so a machine with no Python at all ends up with one either way.
+
+It also turns on Windows Sandbox, for `sandbox:` (asking for admin rights;
+reboot afterwards). `-NoSandbox` leaves it off; on Windows Home it is not
+available, and the installer says so.
+
+From a clone, run it past PowerShell's script policy, which blocks local
+`.ps1` files by default (the one-line install above is not affected):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -DevMode
+```
 
 It does not trust the `python.exe` Windows ships by default. That file is an
 *App Execution Alias* that only opens the Microsoft Store; an earlier version
@@ -79,7 +159,7 @@ backend ignores them:
 
 | Key | Why it is ignored |
 |-----|-------------------|
-| `headless` | there is no offscreen display to render to |
+| `headless` | there is no offscreen display to render to (with `sandbox:`, it minimizes the sandbox's window) |
 | `screen` | no virtual output; the window keeps the size the app gives it — use `resize` after `launch` |
 | `input_backend` | input routing is decided per call, see below |
 | `keyboard_layout` | `type_text` sends Unicode, so text is layout-proof; `key` shortcuts follow the host's own layout |
@@ -110,6 +190,23 @@ front and presses a real mouse button at that screen position.
 `PostMessage` is not a universal background click either. Some toolkits ignore
 posted mouse messages outright — Tk does, measured — so it is kept for the one
 case where it is reliable.
+
+### Display density
+
+wbox works in physical pixels — a screenshot's — and so do its clicks, at any
+display scaling and whatever DPI awareness the app declares. An app that is
+not per-monitor aware counts in logical pixels (the physical ones divided by
+the scaling), and Windows translates both routes for it: `SendInput` moves
+the real pointer, and a posted mouse message to a DPI-unaware window is
+scaled by Windows from the sender's awareness. Converting a posted click to
+the app's pixels first would scale it twice: measured at 150 %, a click
+aimed at (60,40) in the app's own pixels arrived at (40,27).
+
+`tests/test_windows_density.py` holds this for apps that are DPI unaware,
+system aware and per-monitor aware, through both routes. It measures the
+scaling from the app itself instead of assuming one, so it holds at whatever
+density it runs: 150 % on the machine it was written on (and in Windows
+Sandbox there), 100 % on CI's runner.
 
 ### When the window cannot come to the front, input is refused
 
@@ -176,17 +273,23 @@ scaling**, CPython 3.12, against a Tk test app and Win11 Notepad.
 | `resize` | ⚠️ off by a couple of pixels (900×650 → 898×648) |
 | `screenshot(scale=…)`, `screenshot(region=…)` | ❌ returns an error |
 | `list_windows`, `focus_window` | ❌ return nothing |
-| `headless`, `screen` | ❌ ignored |
-| Isolation from your desktop | ❌ none |
+| `headless` | ✅ with `sandbox:` (the sandbox's window minimized), ❌ ignored without |
+| `screen` | ❌ ignored |
+| Isolation from your desktop | ✅ with `sandbox:`, ❌ none without |
+| Clicks on DPI-unaware and system-aware apps | ✅ both routes, at 150 % |
 
 Rows not listed here have not been checked on Windows.
 
-There is no Windows CI: the compatibility matrix in [matrix.md](matrix.md)
-covers Linux only, and every row above was measured by hand.
+`tests/test_windows.py` and `tests/test_windows_density.py` check the
+backend end to end against two test apps: in Windows Sandbox when it is on,
+and on the desktop when `WBOX_TEST_DESKTOP=1` (it moves your pointer). CI
+runs the desktop half on a Windows runner; the sandbox half runs where
+Windows Sandbox does — a runner has none.
 
 ## Limitations
 
-**No isolation.** Covered at the top; it is the one that matters most.
+**No isolation without `sandbox:`.** Covered at the top; it is the one that
+matters most.
 
 **Display scaling makes screenshots bigger, not sharper.** Most apps are not
 DPI-aware, so at 150% scaling Windows renders them at their own size and
@@ -238,10 +341,11 @@ while holding the clipboard can leave it locked for the whole session, and
 Windows does not always say who holds it. Signing out clears it; restarting
 the *Clipboard User Service* (`cbdhsvc_*`) usually does too.
 
-## Toward real isolation
+## Another way to isolate: a separate desktop
 
-Not implemented — this section records what a prototype established, so the
-next step starts from measurements rather than assumptions.
+Windows Sandbox is what `sandbox:` uses. This section records what an
+earlier prototype established about a lighter way, not implemented, so that
+a next step starts from measurements rather than assumptions.
 
 The closest thing Windows has to a nested compositor is a **separate desktop
 object** (`CreateDesktop`). An app started on one runs normally but is

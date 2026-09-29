@@ -9,6 +9,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Windows: isolation, through Windows Sandbox.** With `sandbox:` in
+  config.yaml the app runs in a throwaway Windows of its own: the pointer,
+  keyboard and clipboard wbox uses are the sandbox's, and yours are left
+  alone. Same tools, same answers. The sandbox gets the app's folders you
+  mount and nothing else (no network, no shared clipboard); it boots and
+  shows the app in about 15 seconds, and a call takes a few tens of
+  milliseconds. `headless: true` minimizes its window; `keep: true` keeps it
+  up between launches. Needs Windows Pro, Enterprise or Education.
+- **The Windows installer turns Windows Sandbox on** (it asks for admin
+  rights; reboot afterwards). `-NoSandbox` leaves it off.
+- **Windows tests.** The win32 backend is checked end to end against two
+  test apps — in Windows Sandbox when it is on, on the desktop when asked
+  (`WBOX_TEST_DESKTOP=1`, it moves your pointer) — and at any display
+  density, against apps that are DPI unaware, system aware and per-monitor
+  aware. CI runs them on a Windows runner.
+
 ### Fixed
 
 - **Windows: `launch` no longer takes a window that was already open.** A
@@ -21,6 +39,18 @@
 - **Windows: one command per process works** (`wbox_ctl` from a Makefile or a
   script): `screenshot`, `click` and `kill` find the window a previous
   `launch` saved, and `kill` ends the launcher too.
+- **Windows: paths in `app.command` work as written.** The command line was
+  split by POSIX rules, which read a backslash as an escape:
+  `C:\app\app.exe` became `C:appapp.exe`. With the win32 backend, a
+  backslash is a path separator and double quotes group.
+- **The crash dummy runs on Windows**: it takes its commands from a file
+  where there is no FIFO.
+
+### Documentation
+
+- docs/windows.md: the sandbox, display density (why a posted click stays in
+  physical pixels), and running `setup.ps1` from a clone past PowerShell's
+  script policy.
 
 ## [0.8.0] - 2026-09-28
 

@@ -31,7 +31,7 @@ curl -sSL https://raw.githubusercontent.com/quazardous/wbox-mcp/main/setup.sh | 
 irm https://raw.githubusercontent.com/quazardous/wbox-mcp/main/setup.ps1 | iex
 ```
 
-On Windows, read [docs/windows.md](docs/windows.md) first — there is no isolation there. The installer sets up Python too if the machine has none.
+On Windows, read [docs/windows.md](docs/windows.md) first — isolation there comes from Windows Sandbox (`sandbox:` in config.yaml; Pro, Enterprise or Education), which the installer turns on, asking for admin rights; without it the app runs on your desktop. The installer sets up Python too if the machine has none.
 
 **What that script does**, so you can decide before running it: it installs the missing system packages through your distro's package manager (`dnf`, `apt` or `pacman`, asking first), clones this repo into `~/.local/share/wbox-mcp`, installs it into a venv there, and symlinks the two commands `wboxr` and `wbox-mcp` into `~/.local/bin`. It touches nothing else and needs `sudo` only for the packages.
 
@@ -113,19 +113,19 @@ Two settings are worth knowing before you automate a real app:
 | Screenshot | grim (pixel-perfect) | PrintWindow — works behind other windows |
 | Keyboard | wbox-keyboard (virtual keyboard) | SendInput (Unicode) / PostMessage |
 | Mouse | wbox-pointer (virtual pointer) | SendInput / PostMessage |
-| Clipboard | xclip + bridge to host | Win32 clipboard API — yours, shared |
+| Clipboard | xclip + bridge to host | Win32 clipboard API — yours, shared; the sandbox's own with `sandbox:` |
 | Window management | wlrctl (list/focus) | Currently broken — returns nothing |
 | Resize display | wlr-randr | Resizes the window, a few pixels off |
-| App isolation | Full (nested compositor) | **None** (normal process) |
-| Background operation | Yes (isolated display) | Screenshots only; most input takes focus |
-| Offscreen / headless | Yes (`headless: true`) | No — `headless` is ignored |
-| Interferes with host | No | Yes — most clicks move your cursor and take focus |
+| App isolation | Full (nested compositor) | With `sandbox:` (Windows Sandbox); **none** without |
+| Background operation | Yes (isolated display) | With `sandbox:`; without, screenshots only — most input takes focus |
+| Offscreen / headless | Yes (`headless: true`) | With `sandbox:`, the sandbox's window minimized; ignored without |
+| Interferes with host | No | Not with `sandbox:`; without, most clicks move your cursor and take focus |
 
 **Linux** — the app runs inside a nested Wayland compositor (labwc, weston or cage). Full isolation: the app cannot see or interfere with your desktop. Clipboard is bridged automatically, and you can switch that bridge off. Keyboard and mouse are injected through Wayland virtual-input protocols, so nothing leaks onto your own seat.
 
 Set `headless: true` and the nested session runs offscreen — no window on your desktop, while screenshots, clicks and keystrokes keep working exactly the same. Handy for test suites and unattended runs.
 
-**Windows** — the app runs as a normal process, driven through Win32 APIs. There is no isolation: the app shares your desktop and your clipboard, and most clicks warp your real mouse cursor and pull the window to the front. Screenshots work even when the window is covered.
+**Windows** — the app is driven through Win32 APIs. With `sandbox:` it runs in Windows Sandbox, a throwaway Windows of its own that boots in about 15 seconds: the pointer, keyboard and clipboard wbox uses are the sandbox's, and yours are left alone. Without it, the app runs as a normal process on your desktop: it shares your desktop and your clipboard, and most clicks warp your real mouse cursor and pull the window to the front. Screenshots work even when the window is covered.
 
 Two things are safer than they used to be. `type_text` types the characters and never touches your clipboard. And when the app window can't be brought to the front, `click`, `mouse_move` and key combos refuse and name the window that is in the way, instead of clicking it. Elevated apps remain largely off-limits. [docs/windows.md](docs/windows.md) has what was measured to work, the limitations, and troubleshooting.
 

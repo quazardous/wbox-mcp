@@ -15,12 +15,17 @@
 
     Skip PATH modification:
         .\setup.ps1 -NoPathUpdate
+
+    Windows Sandbox, to run apps isolated, is turned on too (admin rights,
+    then a reboot). Leave it off:
+        .\setup.ps1 -NoSandbox
 #>
 
 param(
     [string]$InstallDir = "",
     [switch]$DevMode,
     [switch]$NoPathUpdate,
+    [switch]$NoSandbox,
     [switch]$Help
 )
 
@@ -35,6 +40,8 @@ Options:
   -InstallDir DIR   Install to DIR (default: ~\.local\share\wbox-mcp)
   -DevMode          Use current repo directory (no clone, no pull)
   -NoPathUpdate     Don't add install dir to user PATH
+  -NoSandbox        Don't turn on Windows Sandbox (by default it is, for
+                    sandbox: in config.yaml: admin rights, then a reboot)
   -Help             Show this help
 "@
     exit 0
@@ -295,6 +302,47 @@ if (-not $NoPathUpdate) {
 # Check current session PATH
 $inPath = $env:PATH -like "*$binDir*"
 
+# ── Windows Sandbox ──────────────────────────────────────────────
+# The win32 backend drives apps on your desktop. With `sandbox:` in
+# config.yaml it runs them in Windows Sandbox instead (docs/windows.md),
+# which is an optional Windows feature: Pro, Enterprise or Education, turned
+# on once by an admin, then a reboot.
+
+$sandboxExe = Join-Path $env:WINDIR "System32\WindowsSandbox.exe"
+$sandboxReboot = $false
+if (Test-Path $sandboxExe) {
+    Write-Host ""
+    Write-Host "  Windows Sandbox: on (sandbox: in config.yaml can use it)"
+} elseif (-not $NoSandbox) {
+    $edition = (Get-CimInstance Win32_OperatingSystem).Caption
+    Write-Host ""
+    if ($edition -match "Home") {
+        Write-Host "  Windows Sandbox: not available on $edition (Pro, Enterprise or Education)." -ForegroundColor Yellow
+        Write-Host "  The win32 backend still drives apps on the desktop."
+    } else {
+        Write-Host "Windows Sandbox runs the apps wbox drives isolated from your desktop (-NoSandbox: leave it off)."
+        $feature = "Containers-DisposableClientVM"
+        $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator)
+        try {
+            if ($isAdmin) {
+                Enable-WindowsOptionalFeature -Online -FeatureName $feature -All -NoRestart | Out-Null
+            } else {
+                Write-Host "  Asking for admin rights to turn on Windows Sandbox..." -ForegroundColor Cyan
+                $proc = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList @(
+                    "-NoProfile", "-Command",
+                    "Enable-WindowsOptionalFeature -Online -FeatureName $feature -All -NoRestart | Out-Null; exit `$(if (`$?) { 0 } else { 1 })")
+                if ($proc.ExitCode -ne 0) { throw "the elevated command failed (exit $($proc.ExitCode))" }
+            }
+            $sandboxReboot = $true
+            Write-Host "  Windows Sandbox: turned on - reboot to use it." -ForegroundColor Green
+        } catch {
+            Write-Host "  Windows Sandbox: could not turn it on: $_" -ForegroundColor Yellow
+            Write-Host "  As admin: Enable-WindowsOptionalFeature -Online -FeatureName $feature -All"
+        }
+    }
+}
+
 # ── Summary ──────────────────────────────────────────────────────
 
 Write-Host ""
@@ -316,6 +364,10 @@ if (-not $inPath) {
 Write-Host "  mkdir my-app-mcp; cd my-app-mcp"
 Write-Host "  wboxr init"
 Write-Host ""
+if ($sandboxReboot) {
+    Write-Host "REBOOT to finish turning on Windows Sandbox." -ForegroundColor Yellow
+    Write-Host ""
+}
 Write-Host "To update later:"
 if ($DevMode) {
     Write-Host "  git pull; .\setup.ps1 -DevMode"

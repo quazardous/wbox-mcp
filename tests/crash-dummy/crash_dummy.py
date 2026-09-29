@@ -28,6 +28,19 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+if sys.platform == "win32":
+    # The DPI awareness the app declares (CRASH_DUMMY_DPI): per-monitor by
+    # default, as wbox's win32 backend is. `unaware` and `system` are how the
+    # tests check wbox against apps that count in logical pixels: on a scaled
+    # display, their coordinates are the physical ones divided by the scale.
+    try:
+        import ctypes
+        _mode = {"unaware": -1, "system": -2, "permonitor": -4}[
+            os.environ.get("CRASH_DUMMY_DPI", "permonitor")]
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(_mode))
+    except (AttributeError, OSError, KeyError):
+        pass
+
 MODE = os.environ.get("CRASH_DUMMY_MODE", "normal")
 LOG_PATH = os.environ.get("CRASH_DUMMY_LOG", "log/crash_dummy.log")
 FIFO_PATH = os.environ.get("CRASH_DUMMY_FIFO", "log/crash_dummy.fifo")
@@ -194,6 +207,14 @@ class CrashDummy:
             os.unlink(FIFO_PATH)
         except FileNotFoundError:
             pass
+        if not hasattr(os, "mkfifo"):
+            # Windows has no FIFO: the same path is a plain file the tests
+            # append lines to, read from where the last read stopped.
+            open(FIFO_PATH, "w").close()
+            self._fifo_thread = threading.Thread(target=self._file_reader, daemon=True)
+            self._fifo_thread.start()
+            self._log_file.write(f"[{time.strftime('%H:%M:%S')}] commands={FIFO_PATH}\n")
+            return
         os.mkfifo(FIFO_PATH)
         self._fifo_thread = threading.Thread(target=self._fifo_reader, daemon=True)
         self._fifo_thread.start()
@@ -210,6 +231,25 @@ class CrashDummy:
                             self._cmd_queue.append(line)
             except OSError:
                 break
+
+    def _file_reader(self):
+        """Background thread (Windows): new lines of the command file."""
+        offset = 0
+        while True:
+            try:
+                with open(FIFO_PATH, "rb") as f:
+                    f.seek(offset)
+                    chunk = f.read()
+                # A line still being written waits for its newline.
+                complete = chunk[:chunk.rfind(b"\n") + 1]
+                offset += len(complete)
+                for line in complete.decode("utf-8", "replace").splitlines():
+                    line = line.strip()
+                    if line:
+                        self._cmd_queue.append(line)
+            except OSError:
+                pass
+            time.sleep(0.05)
 
     def _poll_commands(self):
         """Process queued commands from the FIFO in the tkinter main thread."""
