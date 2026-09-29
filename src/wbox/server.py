@@ -501,6 +501,14 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                             "type": "string",
                             "description": "Folder name for the frames",
                         },
+                        "assemble": {
+                            "type": "string",
+                            "enum": ["gif", "mp4"],
+                            "description": (
+                                "Also assemble the frames into a gif or an "
+                                "mp4. The frames are kept either way."
+                            ),
+                        },
                         "during": {
                             "type": "object",
                             "description": (
@@ -914,7 +922,7 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 compositor.record,
                 arguments["seconds"], arguments.get("region"),
                 arguments.get("fps"), arguments.get("name"),
-                arguments.get("during"),
+                arguments.get("during"), arguments.get("assemble"),
             )
             return _reply(result)
 

@@ -11,18 +11,6 @@
 
 ### Added
 
-- **`record` films the display while a gesture plays** (#3228). One
-  screenshot at a time is far too slow to catch a flicker, an animation, or
-  what happens mid-drag. `record` captures for a few seconds — a region films
-  several times faster than the full screen — and `during` plays a drag, a
-  click or a keystroke in step with it, so the film and the gesture need no
-  script to line them up.
-
-  It returns the frames and a summary: how many, the interval actually
-  achieved, and **which frames differ from the one before**. That last one is
-  what makes it a detector rather than a recorder — a value that changes and
-  changes back is a flicker. weston is refused by name: it announces no
-  wlr-screencopy, so there is nothing to capture from.
 - **Windows: `scroll`, `dblclick`, `drag` and `hold`**, which returned an
   error there. They move the real pointer — the sandbox's with `sandbox:` —
   and refuse, like `click`, when the window cannot come to the front. `drag`
@@ -30,20 +18,14 @@
   in Windows Sandbox.
 - **Windows: `record`**, as on Linux: it films the app's window with
   PrintWindow in a loop — 17 frames/s for an 800×600 window, 32/s for a
-  300×200 region — with the same `during` gesture and the same summary. In
-  the sandbox the frames come home as one folder.
-
-### Changed
-
-- **A skip in the test suite now means a capability the backend lacks, and
-  nothing else.** A test that gave up — the app would not launch, its window
-  was not found — used to skip, which is indistinguishable from a backend
-  that legitimately cannot do the thing, and reads as green. Those fail now.
-  Skipping a Windows backend on Linux is still right; skipping labwc because
-  labwc is not installed is not, and the suite says so.
+  300×200 region — with the same `during` gesture, the same summary and the
+  same `assemble`. In the sandbox the frames come home as one folder, and
+  the film is assembled on the host, where ffmpeg is.
 
 ### Fixed
 
+- **Windows CI is green again: `screenshot` makes its folder** when
+  `screenshot_dir` does not exist yet, instead of failing.
 - **Windows: `list_windows` and `focus_window` work.** They looked the
   windows up by the process wbox started, and many apps hand their window
   to another one: they found nothing. They now also look by the process
@@ -55,8 +37,37 @@
   scaling the window's frame was computed at the wrong DPI, and the client
   area came out a couple of pixels short (900×650 gave 898×648). The frame
   is now measured, and the answer is the size the window really took.
-- **`screenshot` makes its folder** when `screenshot_dir` does not exist
-  yet, instead of failing — found by the first Windows CI run.
+- **The Linux suite skips on Windows** instead of failing there by the
+  hundred: its compositors are a capability Windows does not have, as the
+  Windows tests are skipped on Linux.
+
+## [0.10.0] - 2026-09-29
+
+### Added
+
+- **`record` films the display while a gesture plays** (#3228). One
+  screenshot at a time is far too slow to catch a flicker, an animation, or
+  what happens mid-drag. `record` captures for a few seconds — a region films
+  several times faster than the full screen — and `during` plays a drag, a
+  click or a keystroke in step with it, so the film and the gesture need no
+  script to line them up.
+
+  It returns the frames and a summary: how many, the interval actually
+  achieved, and **which frames differ from the one before**. That last one is
+  what makes it a detector rather than a recorder — a value that changes and
+  changes back is a flicker. `assemble: "gif"` or `"mp4"` also turns the
+  frames into a film, keeping the frames — they are what an analysis reads,
+  the film is for a human. weston is refused by name: it announces no
+  wlr-screencopy, so there is nothing to capture from.
+
+### Changed
+
+- **A skip in the test suite now means a capability the backend lacks, and
+  nothing else.** A test that gave up — the app would not launch, its window
+  was not found — used to skip, which is indistinguishable from a backend
+  that legitimately cannot do the thing, and reads as green. Those fail now.
+  Skipping a Windows backend on Linux is still right; skipping labwc because
+  labwc is not installed is not, and the suite says so.
 
 ## [0.9.0] - 2026-09-29
 

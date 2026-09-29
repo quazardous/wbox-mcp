@@ -1266,7 +1266,7 @@ class Win32Compositor(CompositorServer):
 
     def record(self, seconds: float, region: str | None = None,
                fps: float | None = None, name: str | None = None,
-               during: dict | None = None) -> dict:
+               during: dict | None = None, assemble: str | None = None) -> dict:
         """Film the app's window for `seconds`, optionally while a gesture
         plays — the base class's `record`, with the window captured by
         PrintWindow in a loop instead of grim.
@@ -1325,12 +1325,15 @@ class Win32Compositor(CompositorServer):
             if thread:
                 thread.join(timeout=max(5.0, seconds))
 
-        return {
+        result = {
             "frames_dir": str(frames_dir),
             "frames": len(frames),
             **self._record_summary(frames, stamps, time.monotonic() - started),
             **({"during_error": gesture_error[0]} if gesture_error else {}),
         }
+        if assemble and frames:
+            result.update(self._assemble(frames_dir, assemble, result.get("fps") or 10))
+        return result
 
     def click(self, x: int, y: int, button: int = 1) -> dict:
         if not self.is_running():

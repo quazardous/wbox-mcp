@@ -460,8 +460,11 @@ class SandboxCompositor(CompositorServer):
         return result
 
     def record(self, seconds: float, region: str | None = None, fps: float | None = None,
-               name: str | None = None, during: dict | None = None) -> dict:
-        """Filmed in the sandbox, the frames brought home as one folder."""
+               name: str | None = None, during: dict | None = None,
+               assemble: str | None = None) -> dict:
+        """Filmed in the sandbox, the frames brought home as one folder, and
+        the film, if asked, assembled here: ffmpeg is on the host, not in a
+        fresh Windows."""
         if not self._agent_alive():
             return {"error": "the sandbox is not running"}
         name = name or f"record_{int(time.time())}"
@@ -476,6 +479,8 @@ class SandboxCompositor(CompositorServer):
                 shutil.move(str(frame), home / frame.name)
             filmed.rmdir()
             result["frames_dir"] = str(home)
+            if assemble and result.get("frames"):
+                result.update(self._assemble(home, assemble, result.get("fps") or 10))
         return result
 
     def _bring_home(self, path: Path) -> Path:

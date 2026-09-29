@@ -135,16 +135,25 @@ Two things are safer than they used to be. `type_text` types the characters and 
 
 Plus custom script tools via `wboxr tool add`.
 
-### Filming: `record`
+### Seeing what a screenshot cannot show
 
-One screenshot at a time is far too slow to see a flicker, an animation, or what happens mid-drag. `record` films for a few seconds — optionally a region, which films faster — and `during` plays a gesture (a drag, a click, a key, some text, the wheel) in step with it, so the film and the gesture need no script to line them up:
+`record` films the display for a few seconds instead of catching one instant.
+A region films several times faster than the full screen, and `during` plays a
+drag, a click or a keystroke while the capture runs, so the film and the
+gesture need no script to line them up.
 
-```json
-{"seconds": 2, "region": "0,0 400x300",
- "during": {"type": "drag", "x1": 100, "y1": 100, "x2": 300, "y2": 200, "seconds": 1}}
-```
+It returns the frames and a summary — how many, the interval actually
+achieved, and **which frames differ from the one before**. That last one is
+what catches a flicker: a value that changes and changes back. Pass
+`assemble: "gif"` (or `"mp4"`) to also get a film; the frames are kept either
+way, since they are what a per-frame analysis reads.
 
-It answers with the folder of frames and a summary: how many, the rate actually achieved, and **which frames differ from the one before** — a value that changes and changes back is a flicker. Measured: 27 frames/s full screen and 60/s for a 300×200 region on Linux (labwc, headless); 17/s for an 800×600 window and 32/s for a 300×200 region on Windows, in Windows Sandbox. weston cannot film (it has no wlr-screencopy) and says so.
+Not available under weston, which announces no wlr-screencopy for the capture
+to read.
+
+On Windows it films the app's window, in Windows Sandbox too — measured there,
+17 frames/s for an 800×600 window and 32/s for a 300×200 region — and a
+sandbox's film is assembled on the host, where ffmpeg is.
 
 ### When something goes wrong
 

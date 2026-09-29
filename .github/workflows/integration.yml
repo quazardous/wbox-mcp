@@ -50,6 +50,7 @@ jobs:
             grim \
             xwayland \
             wlrctl \
+            ffmpeg \
             xdotool \
             xclip \
             x11-utils \
@@ -76,7 +77,7 @@ jobs:
         # checked against it.
         run: |
           labwc --version || true
-          for t in wlr-randr wlrctl grim xdotool xclip xprop setxkbmap Xvfb Xwayland; do
+          for t in wlr-randr wlrctl grim ffmpeg xdotool xclip xprop setxkbmap Xvfb Xwayland; do
             printf '%-12s %s\n' "$t" "$(command -v $t || echo MISSING)"
           done
           python3 -c "import tkinter; print('tkinter', tkinter.TkVersion)"
@@ -119,6 +120,12 @@ jobs:
 
       - name: Install wbox
         run: pip install -e ".[test]"
+
+      # record's assemble: on the bench, not behind a skip (as on Linux).
+      - name: Install ffmpeg
+        run: |
+          choco install ffmpeg -y --no-progress
+          ffmpeg -version | Select-Object -First 1
 
       # The Windows Sandbox mode's plumbing (the channel, the .wsb, the
       # forwarded calls) runs anywhere. The sandbox itself does not: a hosted

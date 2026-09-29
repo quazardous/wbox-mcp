@@ -631,7 +631,7 @@ class CompositorServer:
 
     def record(self, seconds: float, region: str | None = None,
                fps: float | None = None, name: str | None = None,
-               during: dict | None = None) -> dict:
+               during: dict | None = None, assemble: str | None = None) -> dict:
         """Film the display for `seconds`, optionally while a gesture plays.
 
         One `screenshot` at a time is too slow to see a flicker, an animation
@@ -705,12 +705,42 @@ class CompositorServer:
             if thread:
                 thread.join(timeout=max(5.0, seconds))
 
-        return {
+        result = {
             "frames_dir": str(frames_dir),
             "frames": len(frames),
             **self._record_summary(frames, stamps, time.monotonic() - started),
             **({"during_error": gesture_error[0]} if gesture_error else {}),
         }
+        if assemble and frames:
+            result.update(self._assemble(frames_dir, assemble,
+                                         result.get("fps") or 10))
+        return result
+
+    @staticmethod
+    def _assemble(frames_dir: Path, kind: str, fps: float) -> dict:
+        """Turn the frames into a gif or an mp4, keeping the frames.
+
+        The frames stay: they are what a per-frame analysis reads, and the
+        film is for a human. Assembling replaces neither.
+        """
+        if kind not in ("gif", "mp4"):
+            return {"assemble_error": f"unknown format {kind!r}, use gif or mp4"}
+        if not shutil.which("ffmpeg"):
+            return {"assemble_error": "ffmpeg not found — the frames are still there"}
+        out = frames_dir / f"record.{kind}"
+        cmd = ["ffmpeg", "-y", "-framerate", str(round(fps, 2)),
+               "-i", str(frames_dir / "frame_%05d.png")]
+        if kind == "gif":
+            # One shared palette: without it a gif of a UI dithers badly.
+            cmd += ["-vf", "split[a][b];[a]palettegen[p];[b][p]paletteuse"]
+        else:
+            cmd += ["-pix_fmt", "yuv420p"]
+        cmd.append(str(out))
+        result = CompositorServer._run_cmd(cmd, timeout=120)
+        if result.returncode != 0:
+            tail = (result.stderr or "").strip().splitlines()[-1:] or [""]
+            return {"assemble_error": f"ffmpeg failed: {tail[0][:160]}"}
+        return {kind: str(out), f"{kind}_size": out.stat().st_size}
 
     def _play_during(self, during: dict, errors: list) -> None:
         """Run one gesture, recording its error rather than raising it.

@@ -225,6 +225,18 @@ class TestRecord:
         first = sorted(Path(r["frames_dir"]).glob("frame_*.png"))[0]
         assert _png_size(first) == (200, 100)
 
+    def test_it_assembles_a_gif_and_keeps_the_frames(self, harness):
+        """In the sandbox the film is assembled on the host. Not a skip when
+        ffmpeg is missing: that is an incomplete bench (test_integration.py's
+        rule), not a backend that cannot assemble."""
+        r = harness.comp.record(1.0, region="10,40 300x200", name="gif", assemble="gif")
+        assert "error" not in r, r
+        assert "assemble_error" not in r, r["assemble_error"]
+        gif = Path(r["gif"])
+        assert gif.exists() and gif.stat().st_size > 0, r
+        assert gif.parent == Path(r["frames_dir"])
+        assert r["frames"] > 0 and any(Path(r["frames_dir"]).glob("frame_*.png")), r
+
     def test_a_region_outside_the_window_is_refused(self, harness):
         r = harness.comp.record(0.3, region="5000,5000 10x10", name="outside")
         assert "outside the window" in r.get("error", ""), r
