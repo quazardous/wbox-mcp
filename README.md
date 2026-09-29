@@ -114,8 +114,8 @@ Two settings are worth knowing before you automate a real app:
 | Keyboard | wbox-keyboard (virtual keyboard) | SendInput (Unicode) / PostMessage |
 | Mouse | wbox-pointer (virtual pointer) | SendInput / PostMessage |
 | Clipboard | xclip + bridge to host | Win32 clipboard API — yours, shared; the sandbox's own with `sandbox:` |
-| Window management | wlrctl (list/focus) | Currently broken — returns nothing |
-| Resize display | wlr-randr | Resizes the window, a few pixels off |
+| Window management | wlrctl (list/focus) | Win32 (list/focus, which one is active) |
+| Resize display | wlr-randr | Resizes the window: its client area, to the pixel |
 | App isolation | Full (nested compositor) | With `sandbox:` (Windows Sandbox); **none** without |
 | Background operation | Yes (isolated display) | With `sandbox:`; without, screenshots only — most input takes focus |
 | Offscreen / headless | Yes (`headless: true`) | With `sandbox:`, the sandbox's window minimized; ignored without |
@@ -150,6 +150,10 @@ way, since they are what a per-frame analysis reads.
 
 Not available under weston, which announces no wlr-screencopy for the capture
 to read.
+
+On Windows it films the app's window, in Windows Sandbox too — measured there,
+17 frames/s for an 800×600 window and 32/s for a 300×200 region — and a
+sandbox's film is assembled on the host, where ffmpeg is.
 
 ### When something goes wrong
 

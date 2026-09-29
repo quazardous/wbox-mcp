@@ -81,8 +81,9 @@ class Place:
 class WindowsHarness:
     """One test app under the win32 backend, in a Place, at a DPI awareness."""
 
-    def __init__(self, place: Place, app: str = "crash", dpi: str = "permonitor"):
+    def __init__(self, place: Place, app: str = "crash", dpi: str = "permonitor", mode: str = "fixed"):
         self.place = place
+        self.mode = mode  # the crash dummy's: fixed (not resizable) or normal
         self.where = place.where
         self.app, self.dpi = app, dpi
         script, self.title, self._log_env, self._cmd_env, self._dpi_env = APPS[app]
@@ -104,7 +105,7 @@ class WindowsHarness:
         if self._cmd_env:
             env[self._cmd_env] = f"{shared}\\{self.cmd_path.name}"
         if self.app == "crash":
-            env.update({"CRASH_DUMMY_MODE": "fixed", "CRASH_DUMMY_SIZE": "800x600"})
+            env.update({"CRASH_DUMMY_MODE": self.mode, "CRASH_DUMMY_SIZE": "800x600"})
         result = self.comp.launch([python, f"{apps}\\{self._script}"], env)
         if "error" not in result:
             deadline = time.monotonic() + 30
@@ -167,8 +168,8 @@ def _params():
     return params
 
 
-def _launched(place, app="crash", dpi="permonitor"):
-    h = WindowsHarness(place, app, dpi)
+def _launched(place, app="crash", dpi="permonitor", mode="fixed"):
+    h = WindowsHarness(place, app, dpi, mode)
     result = h.launch()
     if result.get("status") != "running":
         # "already_running" is a failure too: the backend drives one app at

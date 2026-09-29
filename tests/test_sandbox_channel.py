@@ -228,6 +228,18 @@ class TestHostSide:
                 (comp.io_dir / "shots" / name).write_bytes(b"\x89PNG")
                 return {"path": f"C:\\wbox\\io\\shots\\{name}", "size": 4}
 
+            def scroll(self, x, y, notches, horizontal=False):
+                self.calls.append(("scroll", x, y, notches, horizontal))
+                return {"ok": True}
+
+            def hold(self, keys, actions):
+                shots = []
+                for a in actions:
+                    if a["type"] == "screenshot":
+                        self.screenshot(a["name"])
+                        shots.append(f"C:\\wbox\\io\\shots\\{a['name']}")
+                return {"ok": True, "held": keys, "screenshots": shots}
+
         backend = Shooter()
         thread = threading.Thread(target=sandbox_agent.serve, args=(comp.io_dir, backend), daemon=True)
         thread.start()
@@ -239,7 +251,12 @@ class TestHostSide:
             assert shot["path"] == str(tmp_path / "shots" / "look.png")
             assert Path(shot["path"]).read_bytes() == b"\x89PNG"
             assert not (comp.io_dir / "shots" / "look.png").exists()
-            assert "not supported" in comp.scroll(1, 1, 1)["error"]
+            assert comp.scroll(1, 2, -3) == {"ok": True}
+            assert ("scroll", 1, 2, -3, False) in backend.calls
+            # A hold's screenshots come home too, where the host named them.
+            held = comp.hold(["ctrl"], [{"type": "key", "key": "tab"}, {"type": "screenshot", "name": "held"}])
+            assert held["screenshots"] == [str(tmp_path / "shots" / "held.png")]
+            assert Path(held["screenshots"][0]).read_bytes() == b"\x89PNG"
         finally:
             comp.channel.call("shutdown", timeout=5)
             thread.join(timeout=5)

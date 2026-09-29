@@ -121,12 +121,18 @@ jobs:
       - name: Install wbox
         run: pip install -e ".[test]"
 
+      # record's assemble: on the bench, not behind a skip (as on Linux).
+      - name: Install ffmpeg
+        run: |
+          choco install ffmpeg -y --no-progress
+          ffmpeg -version | Select-Object -First 1
+
       # The Windows Sandbox mode's plumbing (the channel, the .wsb, the
       # forwarded calls) runs anywhere. The sandbox itself does not: a hosted
       # runner has no Windows Sandbox, so test_windows.py's sandbox tests
       # skip here and run on a developer's machine.
       - name: Sandbox channel and the win32 backend on the desktop
-        run: python -m pytest tests/test_sandbox_channel.py tests/test_windows.py tests/test_windows_density.py -v -rs
+        run: python -m pytest tests/test_sandbox_channel.py tests/test_windows.py tests/test_windows_density.py tests/test_windows_resize.py -v -rs
 
       - name: Upload logs on failure
         if: failure()

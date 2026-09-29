@@ -7,6 +7,40 @@
   Format: https://semver.org
 -->
 
+## [Unreleased]
+
+### Added
+
+- **Windows: `scroll`, `dblclick`, `drag` and `hold`**, which returned an
+  error there. They move the real pointer — the sandbox's with `sandbox:` —
+  and refuse, like `click`, when the window cannot come to the front. `drag`
+  travels in steps, `hold` releases its keys whatever happens; both checked
+  in Windows Sandbox.
+- **Windows: `record`**, as on Linux: it films the app's window with
+  PrintWindow in a loop — 17 frames/s for an 800×600 window, 32/s for a
+  300×200 region — with the same `during` gesture, the same summary and the
+  same `assemble`. In the sandbox the frames come home as one folder, and
+  the film is assembled on the host, where ffmpeg is.
+
+### Fixed
+
+- **Windows CI is green again: `screenshot` makes its folder** when
+  `screenshot_dir` does not exist yet, instead of failing.
+- **Windows: `list_windows` and `focus_window` work.** They looked the
+  windows up by the process wbox started, and many apps hand their window
+  to another one: they found nothing. They now also look by the process
+  that owns the app's window. `list_windows` says which window has the
+  focus (`activated`), and whether each is maximized or minimized, as on
+  Linux; `focus_window` says so when Windows refuses to bring a window
+  forward.
+- **Windows: `resize` gives the size asked, to the pixel.** Under display
+  scaling the window's frame was computed at the wrong DPI, and the client
+  area came out a couple of pixels short (900×650 gave 898×648). The frame
+  is now measured, and the answer is the size the window really took.
+- **The Linux suite skips on Windows** instead of failing there by the
+  hundred: its compositors are a capability Windows does not have, as the
+  Windows tests are skipped on Linux.
+
 ## [0.10.0] - 2026-09-29
 
 ### Added

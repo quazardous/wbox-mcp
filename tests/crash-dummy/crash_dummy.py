@@ -192,6 +192,11 @@ class CrashDummy:
                                    f"wheel button{n} at ({e.x},{e.y})"))
             except tk.TclError:
                 pass
+        # Windows delivers the wheel as <MouseWheel>, its delta signed: a
+        # notch up is +120, a notch down -120.
+        if sys.platform == "win32":
+            self.root.bind("<MouseWheel>", lambda e: self._log(
+                f"wheel delta={e.delta} at ({e.x},{e.y})"))
         self.root.bind("<KeyPress>", self._on_key)
         self.root.bind("<Configure>", self._on_configure)
 

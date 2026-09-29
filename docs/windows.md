@@ -179,6 +179,8 @@ backend ignores them:
 | `key` without modifiers, no dialog open | `PostMessage` | No |
 | `key` with modifiers, or with a dialog open | `SendInput` | Yes |
 | `clipboard_read` / `clipboard_write` | Win32 clipboard API | No |
+| `scroll`, `dblclick`, `drag`, `hold` | `SendInput` | **Yes, and moves your cursor** — refused, like `click`, when the window cannot come forward |
+| `record` | `PrintWindow` in a loop; `region` crops the window's frames | No (its `during` gesture: as that gesture) |
 
 ### Clicks
 
@@ -270,13 +272,15 @@ scaling**, CPython 3.12, against a Tk test app and Win11 Notepad.
 | `key` without modifiers | ✅ without taking focus |
 | `keys`, `clipboard_read`, `clipboard_write`, `get_size` | ✅ |
 | `screenshot` of a minimized window | ⚠️ returns a blank image, not an error |
-| `resize` | ⚠️ off by a couple of pixels (900×650 → 898×648) |
+| `resize` | ✅ the client area exactly the size asked, at 150 % |
+| `record` | ✅ 17 frames/s for an 800×600 window, 32/s for a 300×200 region (Windows Sandbox); a still window reports no change, a drag reports some |
 | `screenshot(scale=…)`, `screenshot(region=…)` | ❌ returns an error |
-| `list_windows`, `focus_window` | ❌ return nothing |
+| `list_windows` (with `activated`, `maximized`, `minimized`), `focus_window` | ✅ |
 | `headless` | ✅ with `sandbox:` (the sandbox's window minimized), ❌ ignored without |
 | `screen` | ❌ ignored |
 | Isolation from your desktop | ✅ with `sandbox:`, ❌ none without |
-| Clicks on DPI-unaware and system-aware apps | ✅ both routes, at 150 % |
+| Clicks on DPI-unaware and system-aware apps | ✅ both routes, at 150 % and 100 % |
+| `scroll` (both ways), `drag` (stepped), `dblclick`, `hold` (released even when an action fails) | ✅ |
 
 Rows not listed here have not been checked on Windows.
 
@@ -311,13 +315,6 @@ Posted messages to it *report success and are discarded*, so a click can
 return `{"ok": true}` having done nothing; `SendInput` mouse events are dropped;
 keyboard input may still get through. Run wbox elevated too if you must target
 an elevated app. (Derived from documented Windows behaviour; not measured.)
-
-**`list_windows` and `focus_window` return nothing** when the app hands its
-window to another process, which is common. They look the window up by the
-process wbox started rather than the one that owns the window.
-
-**`resize` is off by a few pixels** under display scaling: the frame size is
-computed at the wrong DPI.
 
 ## Troubleshooting
 

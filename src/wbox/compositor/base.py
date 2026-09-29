@@ -597,6 +597,8 @@ class CompositorServer:
             name = f"{self.compositor_name}_{self.state.screenshot_seq:04d}.png"
         elif not name.endswith(".png"):
             name += ".png"
+        # A screenshot_dir that does not exist yet is made, not an error.
+        self.state.screenshot_dir.mkdir(parents=True, exist_ok=True)
         return self.state.screenshot_dir / name
 
     def screenshot(self, name: str | None = None, scale: float | None = None,
