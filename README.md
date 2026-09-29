@@ -131,9 +131,25 @@ Two things are safer than they used to be. `type_text` types the characters and 
 
 ## MCP tools
 
-`launch` · `stop` · `kill` · `screenshot` · `click` · `dblclick` · `drag` · `scroll` · `hold` · `type_text` · `key` · `keys` · `mouse_move` · `get_mouse_position` · `get_size` · `resize` · `list_windows` · `focus_window` · `clipboard_read` · `clipboard_write` · `tail_log` · `clean` · `debug_input`
+`launch` · `stop` · `kill` · `screenshot` · `record` · `click` · `dblclick` · `drag` · `scroll` · `hold` · `type_text` · `key` · `keys` · `mouse_move` · `get_mouse_position` · `get_size` · `resize` · `list_windows` · `focus_window` · `clipboard_read` · `clipboard_write` · `tail_log` · `clean` · `debug_input`
 
 Plus custom script tools via `wboxr tool add`.
+
+### Seeing what a screenshot cannot show
+
+`record` films the display for a few seconds instead of catching one instant.
+A region films several times faster than the full screen, and `during` plays a
+drag, a click or a keystroke while the capture runs, so the film and the
+gesture need no script to line them up.
+
+It returns the frames and a summary — how many, the interval actually
+achieved, and **which frames differ from the one before**. That last one is
+what catches a flicker: a value that changes and changes back. Pass
+`assemble: "gif"` (or `"mp4"`) to also get a film; the frames are kept either
+way, since they are what a per-frame analysis reads.
+
+Not available under weston, which announces no wlr-screencopy for the capture
+to read.
 
 ### When something goes wrong
 

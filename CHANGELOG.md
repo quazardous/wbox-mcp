@@ -21,7 +21,9 @@
   It returns the frames and a summary: how many, the interval actually
   achieved, and **which frames differ from the one before**. That last one is
   what makes it a detector rather than a recorder — a value that changes and
-  changes back is a flicker. weston is refused by name: it announces no
+  changes back is a flicker. `assemble: "gif"` or `"mp4"` also turns the
+  frames into a film, keeping the frames — they are what an analysis reads,
+  the film is for a human. weston is refused by name: it announces no
   wlr-screencopy, so there is nothing to capture from.
 
 ### Changed

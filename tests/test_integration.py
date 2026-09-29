@@ -705,6 +705,21 @@ class TestRecord:
             f"a drag ran for 1.2s and no frame differed from its neighbour: {r}"
         )
 
+    def test_it_assembles_a_gif_and_keeps_the_frames(self, harness):
+        """The frames are what an analysis reads; the film is for a human."""
+        r = self._record_or_skip(harness.comp, harness.compositor, 1.0,
+                                 region="100,100 300x200", name="gif",
+                                 assemble="gif")
+        assert "error" not in r, r
+        if r.get("assemble_error", "").startswith("ffmpeg not found"):
+            pytest.skip("ffmpeg is not installed on this bench")
+        assert "assemble_error" not in r, r["assemble_error"]
+        gif = Path(r["gif"])
+        assert gif.exists() and gif.stat().st_size > 0, f"empty gif: {r}"
+        assert r["frames"] > 0 and Path(r["frames_dir"]).is_dir(), (
+            f"assembling must not consume the frames: {r}"
+        )
+
     def test_fps_caps_the_rate(self, harness):
         r = self._record_or_skip(harness.comp, harness.compositor, 1.0,
                                  region="100,100 300x200", fps=10,
