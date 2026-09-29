@@ -28,6 +28,10 @@
   and refuse, like `click`, when the window cannot come to the front. `drag`
   travels in steps, `hold` releases its keys whatever happens; both checked
   in Windows Sandbox.
+- **Windows: `record`**, as on Linux: it films the app's window with
+  PrintWindow in a loop — 17 frames/s for an 800×600 window, 32/s for a
+  300×200 region — with the same `during` gesture and the same summary. In
+  the sandbox the frames come home as one folder.
 
 ### Changed
 

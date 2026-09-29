@@ -180,6 +180,7 @@ backend ignores them:
 | `key` with modifiers, or with a dialog open | `SendInput` | Yes |
 | `clipboard_read` / `clipboard_write` | Win32 clipboard API | No |
 | `scroll`, `dblclick`, `drag`, `hold` | `SendInput` | **Yes, and moves your cursor** — refused, like `click`, when the window cannot come forward |
+| `record` | `PrintWindow` in a loop; `region` crops the window's frames | No (its `during` gesture: as that gesture) |
 
 ### Clicks
 
@@ -272,6 +273,7 @@ scaling**, CPython 3.12, against a Tk test app and Win11 Notepad.
 | `keys`, `clipboard_read`, `clipboard_write`, `get_size` | ✅ |
 | `screenshot` of a minimized window | ⚠️ returns a blank image, not an error |
 | `resize` | ✅ the client area exactly the size asked, at 150 % |
+| `record` | ✅ 17 frames/s for an 800×600 window, 32/s for a 300×200 region (Windows Sandbox); a still window reports no change, a drag reports some |
 | `screenshot(scale=…)`, `screenshot(region=…)` | ❌ returns an error |
 | `list_windows` (with `activated`, `maximized`, `minimized`), `focus_window` | ✅ |
 | `headless` | ✅ with `sandbox:` (the sandbox's window minimized), ❌ ignored without |

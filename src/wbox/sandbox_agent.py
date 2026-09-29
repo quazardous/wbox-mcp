@@ -41,7 +41,7 @@ METHODS = {
     "launch", "stop", "kill", "is_running", "screenshot", "click", "type_text",
     "key", "keys", "mouse_move", "list_windows", "focus_window", "get_size",
     "resize", "clipboard_read", "clipboard_write",
-    "scroll", "double_click", "drag", "hold",
+    "scroll", "double_click", "drag", "hold", "record",
 }
 
 POLL_S = 0.02

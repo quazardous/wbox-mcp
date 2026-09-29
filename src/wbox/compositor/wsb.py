@@ -459,6 +459,25 @@ class SandboxCompositor(CompositorServer):
                                      if (self.io_dir / "shots" / p.name).exists()]
         return result
 
+    def record(self, seconds: float, region: str | None = None, fps: float | None = None,
+               name: str | None = None, during: dict | None = None) -> dict:
+        """Filmed in the sandbox, the frames brought home as one folder."""
+        if not self._agent_alive():
+            return {"error": "the sandbox is not running"}
+        name = name or f"record_{int(time.time())}"
+        result = self.channel.call("record", {"seconds": seconds, "region": region, "fps": fps,
+                                              "name": name, "during": during},
+                                   timeout=CALL_TIMEOUT + max(0.0, float(seconds)))
+        filmed = self.io_dir / "shots" / name
+        if "frames_dir" in result and filmed.is_dir():
+            home = self.state.screenshot_dir / name
+            home.mkdir(parents=True, exist_ok=True)
+            for frame in filmed.iterdir():
+                shutil.move(str(frame), home / frame.name)
+            filmed.rmdir()
+            result["frames_dir"] = str(home)
+        return result
+
     def _bring_home(self, path: Path) -> Path:
         """A screenshot the sandbox made, moved to where the host wants it."""
         path.parent.mkdir(parents=True, exist_ok=True)

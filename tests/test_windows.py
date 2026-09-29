@@ -197,6 +197,39 @@ class TestWindows:
             harness.comp.focus_window(title=TITLE)
 
 
+class TestRecord:
+    """record: frames in a loop, and a summary that says which changed —
+    silence and noise both asserted, as test_integration.py does on Linux:
+    a detector that always says "something moved" detects nothing."""
+
+    def test_a_still_window_films_without_change(self, harness):
+        # Nothing moves: the pointer away from the window's hover states.
+        harness.comp.mouse_move(5, 5)
+        time.sleep(0.5)
+        r = harness.comp.record(1.5, name="still")
+        assert "error" not in r, r
+        assert r["frames"] >= 5, r
+        assert r["changes"] == 0, r
+
+    def test_a_drag_filmed_shows_change(self, harness):
+        r = harness.comp.record(2.0, name="drag", during={
+            "type": "drag", "x1": 200, "y1": 250, "x2": 600, "y2": 400, "steps": 20, "seconds": 1.0})
+        assert "error" not in r, r
+        assert "during_error" not in r, r
+        assert r["changes"] > 0, r
+        assert Path(r["frames_dir"]).is_dir()
+
+    def test_a_region_crops_the_frames(self, harness):
+        r = harness.comp.record(0.5, region="10,40 200x100", name="region")
+        assert "error" not in r, r
+        first = sorted(Path(r["frames_dir"]).glob("frame_*.png"))[0]
+        assert _png_size(first) == (200, 100)
+
+    def test_a_region_outside_the_window_is_refused(self, harness):
+        r = harness.comp.record(0.3, region="5000,5000 10x10", name="outside")
+        assert "outside the window" in r.get("error", ""), r
+
+
 class TestClipboard:
     def test_write_then_read(self, harness):
         text = f"wbox {harness.where} {time.time_ns()}"

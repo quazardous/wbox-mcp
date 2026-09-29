@@ -29,6 +29,11 @@ import pytest
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+# The Linux compositors cannot exist on Windows: a capability the platform
+# lacks, so a skip — as test_windows.py is skipped on Linux.
+pytestmark = pytest.mark.skipif(sys.platform == "win32",
+                                reason="Linux compositors: not on Windows")
+
 CRASH_DUMMY_DIR = Path(__file__).parent / "crash-dummy"
 
 # Tests run offscreen by default — set WBOX_TEST_VISIBLE=1 to see the windows

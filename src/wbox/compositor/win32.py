@@ -16,6 +16,7 @@ import logging
 import os
 import struct
 import subprocess
+import threading
 import time
 import zlib
 from dataclasses import dataclass
@@ -358,8 +359,30 @@ def map_to_child(parent: int, child: int, x: int, y: int) -> tuple[int, int]:
 
 # ── PNG encoding (no Pillow) ─────────────────────────────────────
 
-def bgra_to_png(data: bytes, width: int, height: int) -> bytes:
-    """Convert raw BGRA pixel buffer to PNG using only stdlib."""
+def crop_bgra(data: bytes, width: int, height: int,
+              x: int, y: int, w: int, h: int) -> tuple[bytes, int, int]:
+    """The (x, y, w, h) part of a BGRA buffer, clamped to it."""
+    x, y = max(0, x), max(0, y)
+    w, h = max(0, min(w, width - x)), max(0, min(h, height - y))
+    stride = width * 4
+    rows = b"".join(data[(y + r) * stride + x * 4:(y + r) * stride + (x + w) * 4] for r in range(h))
+    return rows, w, h
+
+
+def parse_region(region: str) -> tuple[int, int, int, int]:
+    """'x,y WxH' (grim's geometry) as (x, y, w, h)."""
+    try:
+        at, size = region.strip().split()
+        x, y = (int(v) for v in at.split(","))
+        w, h = (int(v) for v in size.lower().split("x"))
+    except ValueError:
+        raise ValueError(f"region must be 'x,y WxH', not {region!r}") from None
+    return x, y, w, h
+
+
+def bgra_to_png(data: bytes, width: int, height: int, level: int = 6) -> bytes:
+    """Convert raw BGRA pixel buffer to PNG using only stdlib. `level` is
+    zlib's: 1 is several times faster, for frames filmed in a loop."""
     rgba = bytearray(data)
     rgba[0::4] = data[2::4]
     rgba[2::4] = data[0::4]
@@ -369,7 +392,7 @@ def bgra_to_png(data: bytes, width: int, height: int) -> bytes:
         raw_rows.append(0)  # filter byte: None
         raw_rows += rgba[y * stride:(y + 1) * stride]
 
-    compressed = zlib.compress(bytes(raw_rows), 6)
+    compressed = zlib.compress(bytes(raw_rows), level)
 
     def chunk(chunk_type: bytes, chunk_data: bytes) -> bytes:
         c = chunk_type + chunk_data
@@ -1238,6 +1261,76 @@ class Win32Compositor(CompositorServer):
         finally:
             self._send_mouse(*[_make_keyboard_input(vk, flags=KEYEVENTF_KEYUP) for vk in reversed(held)])
         return {"ok": True, "held": keys, "done": done, **({"screenshots": shots} if shots else {})}
+
+    # ── Recording ────────────────────────────────────────────────
+
+    def record(self, seconds: float, region: str | None = None,
+               fps: float | None = None, name: str | None = None,
+               during: dict | None = None) -> dict:
+        """Film the app's window for `seconds`, optionally while a gesture
+        plays — the base class's `record`, with the window captured by
+        PrintWindow in a loop instead of grim.
+
+        `region` is 'x,y WxH' in the window's own pixels, a screenshot's: the
+        frames are cropped to it, and a small region films faster (less to
+        encode). Frames are PNGs encoded the same way each time, so the
+        summary's byte comparison still says which frames changed.
+        """
+        if not self.is_running():
+            return {"error": "app is not running"}
+        if seconds <= 0:
+            return {"error": "seconds must be positive"}
+        crop = None
+        if region:
+            try:
+                crop = parse_region(region)
+            except ValueError as exc:
+                return {"error": str(exc)}
+
+        frames_dir = (self.state.screenshot_dir or Path(".")) / (name or f"record_{int(time.time())}")
+        try:
+            frames_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return {"error": f"cannot create {frames_dir}: {exc}"}
+        min_interval = (1.0 / fps) if fps and fps > 0 else 0.0
+
+        gesture_error: list[str] = []
+        thread = threading.Thread(target=self._play_during, args=(during, gesture_error),
+                                  daemon=True) if during else None
+        frames, stamps = [], []
+        started = time.monotonic()
+        if thread:
+            thread.start()
+        try:
+            while time.monotonic() - started < seconds:
+                loop_start = time.monotonic()
+                captured = capture_window_raw(self._hwnd)
+                if captured is None:
+                    return {"error": "PrintWindow failed", "frames": len(frames)}
+                data, width, height = captured
+                if crop:
+                    data, width, height = crop_bgra(data, width, height, *crop)
+                    if not width or not height:
+                        return {"error": f"region {region!r} is outside the window "
+                                         f"({captured[1]}x{captured[2]})"}
+                path = frames_dir / f"frame_{len(frames):05d}.png"
+                path.write_bytes(bgra_to_png(data, width, height, level=1))
+                frames.append(path)
+                stamps.append(loop_start - started)
+                if min_interval:
+                    remaining = min_interval - (time.monotonic() - loop_start)
+                    if remaining > 0:
+                        time.sleep(remaining)
+        finally:
+            if thread:
+                thread.join(timeout=max(5.0, seconds))
+
+        return {
+            "frames_dir": str(frames_dir),
+            "frames": len(frames),
+            **self._record_summary(frames, stamps, time.monotonic() - started),
+            **({"during_error": gesture_error[0]} if gesture_error else {}),
+        }
 
     def click(self, x: int, y: int, button: int = 1) -> dict:
         if not self.is_running():

@@ -131,9 +131,20 @@ Two things are safer than they used to be. `type_text` types the characters and 
 
 ## MCP tools
 
-`launch` · `stop` · `kill` · `screenshot` · `click` · `dblclick` · `drag` · `scroll` · `hold` · `type_text` · `key` · `keys` · `mouse_move` · `get_mouse_position` · `get_size` · `resize` · `list_windows` · `focus_window` · `clipboard_read` · `clipboard_write` · `tail_log` · `clean` · `debug_input`
+`launch` · `stop` · `kill` · `screenshot` · `record` · `click` · `dblclick` · `drag` · `scroll` · `hold` · `type_text` · `key` · `keys` · `mouse_move` · `get_mouse_position` · `get_size` · `resize` · `list_windows` · `focus_window` · `clipboard_read` · `clipboard_write` · `tail_log` · `clean` · `debug_input`
 
 Plus custom script tools via `wboxr tool add`.
+
+### Filming: `record`
+
+One screenshot at a time is far too slow to see a flicker, an animation, or what happens mid-drag. `record` films for a few seconds — optionally a region, which films faster — and `during` plays a gesture (a drag, a click, a key, some text, the wheel) in step with it, so the film and the gesture need no script to line them up:
+
+```json
+{"seconds": 2, "region": "0,0 400x300",
+ "during": {"type": "drag", "x1": 100, "y1": 100, "x2": 300, "y2": 200, "seconds": 1}}
+```
+
+It answers with the folder of frames and a summary: how many, the rate actually achieved, and **which frames differ from the one before** — a value that changes and changes back is a flicker. Measured: 27 frames/s full screen and 60/s for a 300×200 region on Linux (labwc, headless); 17/s for an 800×600 window and 32/s for a 300×200 region on Windows, in Windows Sandbox. weston cannot film (it has no wlr-screencopy) and says so.
 
 ### When something goes wrong
 
