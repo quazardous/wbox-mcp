@@ -7,6 +7,13 @@
   Format: https://semver.org
 -->
 
+## [Unreleased]
+
+### Fixed
+
+- **`screenshot` makes its folder** when `screenshot_dir` does not exist
+  yet, instead of failing — found by the first Windows CI run.
+
 ## [0.9.0] - 2026-09-29
 
 ### Added
