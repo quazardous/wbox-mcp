@@ -537,6 +537,15 @@ MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_MIDDLEDOWN = 0x0020
 MOUSEEVENTF_MIDDLEUP = 0x0040
 MOUSEEVENTF_ABSOLUTE = 0x8000
+MOUSEEVENTF_WHEEL = 0x0800
+MOUSEEVENTF_HWHEEL = 0x1000
+WHEEL_DELTA = 120
+
+_BUTTON_FLAGS = {
+    1: (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+    2: (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+    3: (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+}
 
 
 def _make_keyboard_input(vk: int, flags: int = 0) -> INPUT:
@@ -1047,40 +1056,15 @@ class Win32Compositor(CompositorServer):
         `{"ok": true}`. A click reported as delivered that went somewhere else
         is worse than a click that failed.
         """
-        # Convert window-relative coords to screen coords
-        rect = wt.RECT()
-        GetWindowRect(self._hwnd, ctypes.byref(rect))
-        abs_x = rect.left + x
-        abs_y = rect.top + y
+        abs_x, abs_y = self._screen_point(x, y)
+        refused = self._refuse_pointer(abs_x, abs_y, "click")
+        if refused:
+            return refused
 
-        if not self._bring_to_foreground():
-            blocker = window_at_screen_point(abs_x, abs_y)
-            return {
-                "error": "refused to click: could not bring the window to the "
-                         "foreground, so the click would have landed in "
-                         "another window",
-                "screen_pos": (abs_x, abs_y),
-                "would_have_hit": get_window_title(blocker) or hex(blocker),
-            }
-
-        # Foreground is ours, but something always-on-top can still cover the
-        # exact point we are about to press.
-        occupant = window_at_screen_point(abs_x, abs_y)
-        if occupant and occupant != self._hwnd:
-            return {
-                "error": "refused to click: another window covers the target point",
-                "screen_pos": (abs_x, abs_y),
-                "would_have_hit": get_window_title(occupant) or hex(occupant),
-            }
-
-        if button == 1:
-            down_flag, up_flag = MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP
-        elif button == 2:
-            down_flag, up_flag = MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP
-        elif button == 3:
-            down_flag, up_flag = MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
-        else:
+        flags = _BUTTON_FLAGS.get(button)
+        if not flags:
             return {"error": f"unsupported button: {button}"}
+        down_flag, up_flag = flags
 
         inputs = [
             _make_mouse_input(abs_x, abs_y, down_flag),
@@ -1096,6 +1080,164 @@ class Win32Compositor(CompositorServer):
 
         log.debug("SendInput click at screen (%d, %d) button=%d", abs_x, abs_y, button)
         return {"ok": True, "method": "SendInput", "screen_pos": (abs_x, abs_y)}
+
+    def _screen_point(self, x: int, y: int) -> tuple[int, int]:
+        """A window-relative point (a screenshot's pixel), on the screen."""
+        rect = wt.RECT()
+        GetWindowRect(self._hwnd, ctypes.byref(rect))
+        return rect.left + x, rect.top + y
+
+    def _refuse_pointer(self, abs_x: int, abs_y: int, what: str) -> dict | None:
+        """Why the real pointer must not act at this screen point, if it must
+        not: the window could not come to the front, or something covers the
+        point. Every SendInput gesture asks first (see _sendinput_click)."""
+        if not self._bring_to_foreground():
+            blocker = window_at_screen_point(abs_x, abs_y)
+            return {
+                "error": f"refused to {what}: could not bring the window to the "
+                         f"foreground, so the {what} would have landed in "
+                         "another window",
+                "screen_pos": (abs_x, abs_y),
+                "would_have_hit": get_window_title(blocker) or hex(blocker),
+            }
+        # Foreground is ours, but something always-on-top can still cover the
+        # exact point we are about to press.
+        occupant = window_at_screen_point(abs_x, abs_y)
+        if occupant and occupant != self._hwnd:
+            return {
+                "error": f"refused to {what}: another window covers the target point",
+                "screen_pos": (abs_x, abs_y),
+                "would_have_hit": get_window_title(occupant) or hex(occupant),
+            }
+        return None
+
+    @staticmethod
+    def _send_mouse(*inputs: INPUT) -> None:
+        array = (INPUT * len(inputs))(*inputs)
+        user32.SendInput(len(inputs), ctypes.byref(array), ctypes.sizeof(INPUT))
+
+    # ── Gestures (SendInput: they move the real pointer) ────────────
+
+    def scroll(self, x: int, y: int, notches: int, horizontal: bool = False) -> dict:
+        """Wheel at (x, y). Negative scrolls up (or left)."""
+        if not self.is_running():
+            return {"error": "app is not running"}
+        abs_x, abs_y = self._screen_point(x, y)
+        refused = self._refuse_pointer(abs_x, abs_y, "scroll")
+        if refused:
+            return refused
+        self._last_mouse_x, self._last_mouse_y = x, y
+        self._send_mouse(_make_mouse_input(abs_x, abs_y, MOUSEEVENTF_MOVE))
+        # Windows counts the wheel up as positive, and a tilt right as positive.
+        step = WHEEL_DELTA if (notches > 0) == horizontal else -WHEEL_DELTA
+        flag = MOUSEEVENTF_HWHEEL if horizontal else MOUSEEVENTF_WHEEL
+        for _ in range(abs(int(notches))):
+            inp = _make_mouse_input(abs_x, abs_y, flag)
+            inp._input.mi.mouseData = step & 0xFFFFFFFF
+            self._send_mouse(inp)
+            time.sleep(0.03)
+        return {"ok": True, "method": "SendInput", "notches": int(notches)}
+
+    def double_click(self, x: int, y: int, button: int = 1, interval: float = 0.08) -> dict:
+        """Two clicks close enough together to read as one gesture."""
+        if not self.is_running():
+            return {"error": "app is not running"}
+        abs_x, abs_y = self._screen_point(x, y)
+        refused = self._refuse_pointer(abs_x, abs_y, "double-click")
+        if refused:
+            return refused
+        flags = _BUTTON_FLAGS.get(button)
+        if not flags:
+            return {"error": f"unsupported button: {button}"}
+        self._last_mouse_x, self._last_mouse_y = x, y
+        down, up = flags
+        # Well inside the system's double-click time (500 ms by default).
+        pause = min(max(0.0, interval), user32.GetDoubleClickTime() / 2000)
+        for i in range(2):
+            self._send_mouse(_make_mouse_input(abs_x, abs_y, down), _make_mouse_input(abs_x, abs_y, up))
+            if i == 0:
+                time.sleep(pause)
+        return {"ok": True, "method": "SendInput", "screen_pos": (abs_x, abs_y)}
+
+    def drag(self, x1: int, y1: int, x2: int, y2: int, button: int = 1,
+             steps: int = 10, seconds: float = 0.3) -> dict:
+        """Press at the start, travel in steps, release at the end — the
+        button always released, whatever happens on the way."""
+        if not self.is_running():
+            return {"error": "app is not running"}
+        sx, sy = self._screen_point(x1, y1)
+        ex, ey = self._screen_point(x2, y2)
+        refused = self._refuse_pointer(sx, sy, "drag")
+        if refused:
+            return refused
+        flags = _BUTTON_FLAGS.get(button)
+        if not flags:
+            return {"error": f"unsupported button: {button}"}
+        down, up = flags
+        steps = max(1, int(steps))
+        pause = max(0.0, seconds) / steps
+        self._send_mouse(_make_mouse_input(sx, sy, MOUSEEVENTF_MOVE))
+        self._send_mouse(_make_mouse_input(sx, sy, down))
+        try:
+            for i in range(1, steps + 1):
+                time.sleep(pause)
+                self._send_mouse(_make_mouse_input(sx + (ex - sx) * i // steps,
+                                                   sy + (ey - sy) * i // steps, MOUSEEVENTF_MOVE))
+        finally:
+            self._send_mouse(_make_mouse_input(ex, ey, up))
+        self._last_mouse_x, self._last_mouse_y = x2, y2
+        return {"ok": True, "method": "SendInput", "steps": steps}
+
+    def hold(self, keys: list[str], actions: list[dict]) -> dict:
+        """Hold modifiers, run a sequence, release them whatever happens.
+
+        `actions`: `{"type": "key", "key": "tab"}`, `{"type": "click", "x": 4,
+        "y": 3}`, `{"type": "screenshot", "name": "switcher"}`. A click inside
+        a hold always goes through SendInput: a posted click would not carry
+        the held modifier."""
+        if not self.is_running():
+            return {"error": "app is not running"}
+        if not keys:
+            return {"error": "hold needs at least one modifier"}
+        held = []
+        for name in keys:
+            vk = VK_MAP.get(name.strip().lower())
+            if not vk:
+                return {"error": f"unknown modifier: {name!r}"}
+            held.append(vk)
+        if not self._bring_to_foreground():
+            fg = user32.GetForegroundWindow()
+            return {"error": "refused to hold: could not bring the window to the foreground, "
+                             "so the keys would have gone to another window",
+                    "would_have_hit": get_window_title(fg) or hex(fg)}
+        done, shots = [], []
+        self._send_mouse(*[_make_keyboard_input(vk, flags=0) for vk in held])
+        try:
+            for action in actions:
+                kind = action.get("type")
+                if kind == "key":
+                    _, vk = parse_shortcut(str(action.get("key", "")))
+                    if not vk:
+                        return {"error": f"unknown key: {action.get('key')!r}", "done": done}
+                    self._send_mouse(_make_keyboard_input(vk, flags=0),
+                                     _make_keyboard_input(vk, flags=KEYEVENTF_KEYUP))
+                    time.sleep(0.05)
+                elif kind == "click":
+                    r = self._sendinput_click(int(action["x"]), int(action["y"]),
+                                              int(action.get("button", 1)))
+                    if "error" in r:
+                        return {"error": r["error"], "done": done}
+                elif kind == "screenshot":
+                    r = self.screenshot(action.get("name"))
+                    if "error" in r:
+                        return {"error": r["error"], "done": done}
+                    shots.append(r.get("path"))
+                else:
+                    return {"error": f"unknown action type: {kind!r}", "done": done}
+                done.append(kind)
+        finally:
+            self._send_mouse(*[_make_keyboard_input(vk, flags=KEYEVENTF_KEYUP) for vk in reversed(held)])
+        return {"ok": True, "held": keys, "done": done, **({"screenshots": shots} if shots else {})}
 
     def click(self, x: int, y: int, button: int = 1) -> dict:
         if not self.is_running():
@@ -1379,33 +1521,55 @@ class Win32Compositor(CompositorServer):
 
     # ── Window management ────────────────────────────────────────
 
+    def _app_windows(self) -> list[int]:
+        """The app's visible top-level windows. By the process that owns the
+        window found at launch as well as the one started: many apps hand
+        their window to another process (Win11 Notepad does), and looking
+        by the started one alone found nothing."""
+        pids = {self.state.app_pid, self._window_pid}
+        if self._hwnd and IsWindow(self._hwnd):
+            owner = wt.DWORD()
+            GetWindowThreadProcessId(self._hwnd, ctypes.byref(owner))
+            pids.add(owner.value)
+        windows: list[int] = []
+        for pid in pids - {0}:
+            windows += [h for h in find_windows_by_pid(pid) if h not in windows]
+        return windows
+
     def list_windows(self) -> dict:
-        """List visible top-level windows of the app process."""
+        """The app's windows, with which one has the focus (`activated`) and
+        whether each is maximized or minimized — the shape Linux reports."""
         if not self.is_running():
             return {"error": "app is not running"}
-        windows = []
-        for hwnd in find_windows_by_pid(self.state.app_pid):
-            windows.append({
-                "app_id": get_class_name(hwnd),
-                "title": get_window_title(hwnd),
-            })
-        return {"windows": windows}
+        front = user32.GetForegroundWindow()
+        return {"windows": [{
+            "app_id": get_class_name(hwnd),
+            "title": get_window_title(hwnd),
+            "activated": hwnd == front,
+            "maximized": bool(user32.IsZoomed(hwnd)),
+            "minimized": bool(user32.IsIconic(hwnd)),
+        } for hwnd in self._app_windows()]}
 
     def focus_window(self, title: str = "", app_id: str = "") -> dict:
-        """Focus/raise a window by title substring (app_id matches class name)."""
+        """Bring the app's window whose title (or class, for app_id) contains
+        the text to the front; an error when Windows refuses."""
         if not self.is_running():
             return {"error": "app is not running"}
         if not title and not app_id:
             return {"error": "provide title or app_id"}
-        for hwnd in find_windows_by_pid(self.state.app_pid):
+        for hwnd in self._app_windows():
             if title and title.lower() in get_window_title(hwnd).lower():
                 pass
             elif app_id and app_id.lower() in get_class_name(hwnd).lower():
                 pass
             else:
                 continue
-            SetForegroundWindow(hwnd)
-            self._hwnd = hwnd
+            previous, self._hwnd = self._hwnd, hwnd
+            if not self._bring_to_foreground():
+                self._hwnd = previous
+                fg = user32.GetForegroundWindow()
+                return {"error": "Windows refused to bring the window to the front",
+                        "in_front": get_window_title(fg) or hex(fg)}
             return {"ok": True, "hwnd": hex(hwnd)}
         return {"error": f"no window matching title={title!r} app_id={app_id!r}"}
 
@@ -1433,18 +1597,23 @@ class Win32Compositor(CompositorServer):
         if not self.is_running():
             return {"error": "app is not running"}
 
-        # Adjust for non-client area (title bar, borders)
-        rect = wt.RECT(0, 0, width, height)
-        style = user32.GetWindowLongW(self._hwnd, -16)  # GWL_STYLE
-        ex_style = user32.GetWindowLongW(self._hwnd, -20)  # GWL_EXSTYLE
-        has_menu = user32.GetMenu(self._hwnd) != 0
-        user32.AdjustWindowRectEx(ctypes.byref(rect), style, has_menu, ex_style)
-
-        full_w = rect.right - rect.left
-        full_h = rect.bottom - rect.top
-
-        SetWindowPos(self._hwnd, 0, 0, 0, full_w, full_h, SWP_NOMOVE | SWP_NOZORDER)
-        return {"ok": True, "client_width": width, "client_height": height}
+        # The frame (title bar, borders) is measured, not computed: computing
+        # it (AdjustWindowRectEx) takes no DPI and came out a couple of pixels
+        # off under display scaling. One more pass settles what the window
+        # adjusted by itself (a menu bar wrapping, a minimum size).
+        for _ in range(2):
+            size = self.get_size()
+            if (size["client_width"], size["client_height"]) == (width, height):
+                break
+            full_w = width + size["window_width"] - size["client_width"]
+            full_h = height + size["window_height"] - size["client_height"]
+            SetWindowPos(self._hwnd, 0, 0, 0, full_w, full_h, SWP_NOMOVE | SWP_NOZORDER)
+            time.sleep(0.1)
+        size = self.get_size()
+        result = {"ok": True, "client_width": size["client_width"], "client_height": size["client_height"]}
+        if (size["client_width"], size["client_height"]) != (width, height):
+            result["note"] = "the window chose another size (a minimum, or a fixed size)"
+        return result
 
     # ── Clipboard ────────────────────────────────────────────────
 

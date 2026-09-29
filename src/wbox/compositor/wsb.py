@@ -390,9 +390,7 @@ class SandboxCompositor(CompositorServer):
         guest_file = self.io_dir / "shots" / path.name
         if not guest_file.exists():
             return {"error": f"the sandbox made no screenshot file ({result})"}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(guest_file), path)
-        result["path"] = str(path)
+        result["path"] = str(self._bring_home(path))
         return result
 
     def click(self, x: int, y: int, button: int = 1) -> dict:
@@ -431,19 +429,41 @@ class SandboxCompositor(CompositorServer):
     def clipboard_write(self, text: str) -> dict:
         return self._forward("clipboard_write", text=text)
 
-    # Gestures the win32 backend has not: said plainly, not sent to xdotool.
     def scroll(self, x: int, y: int, notches: int, horizontal: bool = False) -> dict:
-        return {"error": "scroll is not supported by the win32 backend"}
+        return self._forward("scroll", x=x, y=y, notches=notches, horizontal=horizontal)
 
     def double_click(self, x: int, y: int, button: int = 1, interval: float = 0.08) -> dict:
-        return {"error": "dblclick is not supported by the win32 backend"}
+        return self._forward("double_click", x=x, y=y, button=button, interval=interval)
 
     def drag(self, x1: int, y1: int, x2: int, y2: int, button: int = 1, steps: int = 10,
              seconds: float = 0.3) -> dict:
-        return {"error": "drag is not supported by the win32 backend"}
+        if not self._agent_alive():
+            return {"error": "the sandbox is not running"}
+        return self.channel.call("drag", {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "button": button,
+                                          "steps": steps, "seconds": seconds},
+                                 timeout=CALL_TIMEOUT + max(0.0, seconds))
 
     def hold(self, keys: list[str], actions: list[dict]) -> dict:
-        return {"error": "hold is not supported by the win32 backend"}
+        # Its screenshots are taken in the sandbox: named by the host, as
+        # screenshot() does, then brought home.
+        shots, sent = [], []
+        for action in actions:
+            if action.get("type") == "screenshot":
+                path = self._next_screenshot_path(action.get("name"))
+                shots.append(path)
+                action = {**action, "name": path.name}
+            sent.append(action)
+        result = self._forward("hold", keys=list(keys), actions=sent)
+        if "screenshots" in result:
+            result["screenshots"] = [str(self._bring_home(p)) for p in shots
+                                     if (self.io_dir / "shots" / p.name).exists()]
+        return result
+
+    def _bring_home(self, path: Path) -> Path:
+        """A screenshot the sandbox made, moved to where the host wants it."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(self.io_dir / "shots" / path.name), path)
+        return path
 
     def _start_compositor(self, app_cmd, app_env, wl_before, x11_before):
         pass

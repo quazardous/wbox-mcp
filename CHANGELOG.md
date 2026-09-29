@@ -23,6 +23,11 @@
   what makes it a detector rather than a recorder — a value that changes and
   changes back is a flicker. weston is refused by name: it announces no
   wlr-screencopy, so there is nothing to capture from.
+- **Windows: `scroll`, `dblclick`, `drag` and `hold`**, which returned an
+  error there. They move the real pointer — the sandbox's with `sandbox:` —
+  and refuse, like `click`, when the window cannot come to the front. `drag`
+  travels in steps, `hold` releases its keys whatever happens; both checked
+  in Windows Sandbox.
 
 ### Changed
 
@@ -32,6 +37,22 @@
   that legitimately cannot do the thing, and reads as green. Those fail now.
   Skipping a Windows backend on Linux is still right; skipping labwc because
   labwc is not installed is not, and the suite says so.
+
+### Fixed
+
+- **Windows: `list_windows` and `focus_window` work.** They looked the
+  windows up by the process wbox started, and many apps hand their window
+  to another one: they found nothing. They now also look by the process
+  that owns the app's window. `list_windows` says which window has the
+  focus (`activated`), and whether each is maximized or minimized, as on
+  Linux; `focus_window` says so when Windows refuses to bring a window
+  forward.
+- **Windows: `resize` gives the size asked, to the pixel.** Under display
+  scaling the window's frame was computed at the wrong DPI, and the client
+  area came out a couple of pixels short (900×650 gave 898×648). The frame
+  is now measured, and the answer is the size the window really took.
+- **`screenshot` makes its folder** when `screenshot_dir` does not exist
+  yet, instead of failing — found by the first Windows CI run.
 
 ## [0.9.0] - 2026-09-29
 
