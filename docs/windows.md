@@ -179,6 +179,7 @@ backend ignores them:
 | `key` without modifiers, no dialog open | `PostMessage` | No |
 | `key` with modifiers, or with a dialog open | `SendInput` | Yes |
 | `clipboard_read` / `clipboard_write` | Win32 clipboard API | No |
+| `scroll`, `dblclick`, `drag`, `hold` | `SendInput` | **Yes, and moves your cursor** — refused, like `click`, when the window cannot come forward |
 
 ### Clicks
 
@@ -276,7 +277,8 @@ scaling**, CPython 3.12, against a Tk test app and Win11 Notepad.
 | `headless` | ✅ with `sandbox:` (the sandbox's window minimized), ❌ ignored without |
 | `screen` | ❌ ignored |
 | Isolation from your desktop | ✅ with `sandbox:`, ❌ none without |
-| Clicks on DPI-unaware and system-aware apps | ✅ both routes, at 150 % |
+| Clicks on DPI-unaware and system-aware apps | ✅ both routes, at 150 % and 100 % |
+| `scroll` (both ways), `drag` (stepped), `dblclick`, `hold` (released even when an action fails) | ✅ |
 
 Rows not listed here have not been checked on Windows.
 

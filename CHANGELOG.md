@@ -9,6 +9,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Windows: `scroll`, `dblclick`, `drag` and `hold`**, which returned an
+  error there. They move the real pointer — the sandbox's with `sandbox:` —
+  and refuse, like `click`, when the window cannot come to the front. `drag`
+  travels in steps, `hold` releases its keys whatever happens; both checked
+  in Windows Sandbox.
+
 ### Fixed
 
 - **`screenshot` makes its folder** when `screenshot_dir` does not exist

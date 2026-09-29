@@ -120,6 +120,52 @@ class TestCommands:
         assert dump, "empty dump"
 
 
+class TestGestures:
+    """Wheel, drag, double click and a held modifier — each asserting what
+    makes the gesture worth having, not that the call returned ok (as
+    test_integration.py's TestGestures does on Linux)."""
+
+    def test_the_wheel_turns_both_ways(self, harness):
+        assert "error" not in harness.comp.scroll(400, 300, 2)
+        assert "error" not in harness.comp.scroll(400, 300, -1)
+        time.sleep(0.4)
+        deltas = [int(re.search(r"delta=(-?\d+)", l).group(1)) for l in harness.lines("wheel delta=")]
+        # Down is negative for Windows, up positive: wbox's negative is up.
+        assert deltas == [-120, -120, 120], deltas
+
+    def test_drag_travels_instead_of_teleporting(self, harness):
+        harness.mark()
+        assert "error" not in harness.comp.drag(300, 250, 500, 350, steps=10, seconds=0.3)
+        time.sleep(0.4)
+        stepped = len(harness.lines("motion"))
+        harness.mark()
+        assert "error" not in harness.comp.drag(300, 250, 500, 350, steps=1, seconds=0.0)
+        time.sleep(0.4)
+        instant = len(harness.lines("motion"))
+        assert stepped > instant, f"stepped {stepped} motion events, instant {instant}"
+
+    def test_double_click_reads_as_one_gesture(self, harness):
+        assert "error" not in harness.comp.double_click(400, 300)
+        time.sleep(0.5)
+        assert harness.lines("dblclick"), harness.lines()
+
+    def test_hold_keeps_the_modifier_down(self, harness):
+        r = harness.comp.hold(["ctrl"], [{"type": "key", "key": "tab"}, {"type": "key", "key": "tab"}])
+        assert "error" not in r, r
+        time.sleep(0.5)
+        taps = harness.lines("key Tab")
+        assert taps, harness.lines()
+        assert all("Ctrl" in l for l in taps), taps
+
+    def test_hold_releases_when_an_action_fails(self, harness):
+        assert "error" in harness.comp.hold(["ctrl"], [{"type": "nonsense"}])
+        harness.mark()
+        assert "error" not in harness.comp.key("a")
+        time.sleep(0.4)
+        lines = harness.lines("key ")
+        assert lines and not any("Ctrl" in l for l in lines), lines
+
+
 class TestClipboard:
     def test_write_then_read(self, harness):
         text = f"wbox {harness.where} {time.time_ns()}"
