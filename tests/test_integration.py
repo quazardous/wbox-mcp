@@ -711,8 +711,10 @@ class TestRecord:
                                  region="100,100 300x200", name="gif",
                                  assemble="gif")
         assert "error" not in r, r
-        if r.get("assemble_error", "").startswith("ffmpeg not found"):
-            pytest.skip("ffmpeg is not installed on this bench")
+        # Not a skip: ffmpeg missing is an incomplete bench, not a backend
+        # that cannot assemble — the same rule that turned thirty skips into
+        # eight. This test skipped here and CI refused the undeclared skip,
+        # which is the guard working on the guard's own author.
         assert "assemble_error" not in r, r["assemble_error"]
         gif = Path(r["gif"])
         assert gif.exists() and gif.stat().st_size > 0, f"empty gif: {r}"
