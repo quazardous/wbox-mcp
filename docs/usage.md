@@ -109,15 +109,20 @@ Generated entry (absolute paths, no cwd needed):
 | `stop` | Graceful shutdown (SIGTERM → SIGKILL on Linux) |
 | `kill` | Force kill + cleanup |
 | `screenshot` | Capture display (returns image, includes modal dialogs) |
+| `record` | Film the display for a few seconds, optionally while a gesture plays (`during`); returns the frames and which of them differ from the one before. `region` films faster; `assemble: "gif"` or `"mp4"` also makes a film. Not under weston |
 | `click` | Click at (x, y) with optional button (1=left, 2=middle, 3=right) |
+| `dblclick` | Double-click at (x, y), with optional button and interval between the two clicks |
+| `drag` | Press at (x1, y1), travel to (x2, y2) in steps, release |
+| `scroll` | Scroll the wheel at (x, y) by a number of notches; negative scrolls up (or left with `horizontal`) |
+| `hold` | Hold modifiers down, run a sequence of actions, then release them — even if an action fails |
 | `type_text` | Type text into focused widget |
 | `key` | Send keyboard shortcut (e.g. `ctrl+s`, `alt+F4`, `super+a`) |
 | `keys` | Send multiple keys in sequence with configurable delay |
 | `mouse_move` | Move mouse to (x, y) without clicking |
 | `get_mouse_position` | Get current cursor coordinates |
 | `get_size` | Get display dimensions (width, height) |
-| `resize` | Resize display (labwc/weston only) |
-| `list_windows` | List all windows/toplevels in the compositor (via wlrctl) |
+| `resize` | Resize display (labwc/weston); on Windows, the app's window |
+| `list_windows` | List all windows/toplevels (wlrctl on Linux, Win32 on Windows) |
 | `focus_window` | Focus/raise a window by title or app_id |
 | `clipboard_read` | Read text from clipboard |
 | `clipboard_write` | Write text to clipboard |
@@ -229,12 +234,16 @@ tools:
 
 ### Windows (Win32 backend)
 
-Several Linux keys (`headless`, `screen`, `input_backend`, …) are accepted but ignored here — [windows.md](windows.md#keys-that-do-nothing-on-windows) has the list.
+Several Linux keys (`screen`, `input_backend`, …) are accepted but ignored here — [windows.md](windows.md#keys-that-do-nothing-on-windows) has the list. `headless` only acts with `sandbox:`, which runs the app in [Windows Sandbox](windows.md#isolation-windows-sandbox).
 
 ```yaml
 name: my-app
 compositor: win32          # auto-detected on Windows
 title_hint: "LibreOffice"  # substring to match in window title
+
+# sandbox:                 # run the app in Windows Sandbox instead of on your
+#   mounts:                # desktop — see windows.md for the keys
+#     - {host: ./build, guest: 'C:\app', readonly: true}
 
 log:
   dir: ./log

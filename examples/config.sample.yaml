@@ -8,7 +8,7 @@ name: my-wbox
 
 # ── Compositor ─────────────────────────────────────────────────────
 #
-# Which nested Wayland compositor to run.
+# Which nested Wayland compositor to run (Linux), or win32 on Windows.
 #
 #   labwc   — (default) wlroots-based stacking WM. Resizable, movable window.
 #             Supports hybrid/wayland input backends (wlroots protocols).
@@ -17,9 +17,47 @@ name: my-wbox
 #   cage    — Kiosk compositor. Fixed-size fullscreen, no resize/move.
 #             Supports hybrid/wayland input backends (wlroots-based).
 #
+#   win32   — Windows (auto-detected there). No compositor: the app is
+#             driven through Win32 APIs. See the Windows section below.
+#
 compositor: labwc
 # compositor: weston
 # compositor: cage
+# compositor: win32
+
+# ── Windows (compositor: win32) ────────────────────────────────────
+#
+# title_hint: substring of the app's window title, as localized (Win11
+# Notepad is "Bloc-notes" on a French system). Many apps hand their
+# window to another process, so the hint is what finds it.
+#
+# sandbox: run the app in Windows Sandbox, a throwaway Windows of its
+# own, instead of on your desktop: the pointer, keyboard and clipboard
+# wbox uses are the sandbox's. Without it there is no isolation — most
+# clicks move your real cursor and take focus. Needs Windows 10/11 Pro,
+# Enterprise or Education (setup.ps1 turns the feature on). The sandbox
+# is a fresh Windows: the app must come from a folder you mount.
+#
+# With sandbox:, "headless: true" minimizes the sandbox's window.
+# Without it, headless is ignored — as are screen, input_backend,
+# keyboard_layout, undecorate, clipboard_bridge and the weston options.
+#
+# title_hint: "My App"
+# sandbox:
+#   mounts:                 # host is relative to this file
+#     - {host: ./build, guest: 'C:\app', readonly: true}
+#   networking: false       # true: the app gets a network (through the host)
+#   vgpu: true              # false: software rendering (WARP)
+#   memory_mb: 4096         # default: Windows'
+#   keep: false             # true: kill/stop leave the sandbox up, and the
+#                           # next launch reuses it, with no boot
+#   boot_timeout: 180       # seconds to boot and answer
+# timeouts:
+#   window_discovery: 10    # wait for the app's window to appear
+#   edit_control: 3         # wait for the text-input control
+#   app_render: 3           # wait for the app to draw
+# app:
+#   command: 'C:\app\myapp.exe'
 
 # Screen size (WxH) — initial size of the nested compositor window.
 screen: "1280x800"

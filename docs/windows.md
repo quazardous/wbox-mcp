@@ -164,10 +164,13 @@ backend ignores them:
 | `input_backend` | input routing is decided per call, see below |
 | `keyboard_layout` | `type_text` sends Unicode, so text is layout-proof; `key` shortcuts follow the host's own layout |
 | `undecorate` | Windows draws the title bar; screenshots include it |
-| `clipboard_bridge` | there is one clipboard, and it is yours |
+| `clipboard_bridge` | there is one clipboard, and it is yours (with `sandbox:`, the sandbox's own, never bridged) |
 | `weston_shell`, `weston_backend` | Linux compositors only |
 
 ## How input is delivered
+
+With `sandbox:` the routing is the same, inside the sandbox: "your cursor"
+and the focus below are the sandbox's, not yours.
 
 | Operation | API | Takes focus |
 |-----------|-----|-------------|

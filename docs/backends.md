@@ -52,7 +52,9 @@ input_backend:
 
 ## Windows
 
-Windows has no compositor: the app runs as an ordinary process on your desktop
-and is driven through Win32 APIs, with no isolation. How input is routed, what
+Windows has no compositor: the app is driven through Win32 APIs. With
+`sandbox:` it runs in Windows Sandbox, isolated from your desktop; without it,
+as an ordinary process on your desktop, with no isolation. The sandbox, how
+input is routed, what
 has been measured to work, the limitations and the troubleshooting all live in
 **[windows.md](windows.md)**.

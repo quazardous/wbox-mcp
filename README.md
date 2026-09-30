@@ -2,7 +2,7 @@
 
 **Run any desktop app in an isolated box that Claude can see and control — without touching your desktop.**
 
-Most computer-use servers automate *your* screen: they move your real mouse, steal your focus, and see whatever you have open. wbox gives the app its own nested compositor instead. Claude clicks and types inside that box, screenshots it pixel-perfect, and your desktop never knows it happened. You can keep working while it does.
+Most computer-use servers automate *your* screen: they move your real mouse, steal your focus, and see whatever you have open. wbox gives the app its own nested compositor instead — on Windows, a Windows Sandbox of its own. Claude clicks and types inside that box, screenshots it pixel-perfect, and your desktop never knows it happened. You can keep working while it does.
 
 ![LibreOffice Writer running inside wbox, headless](docs/images/writer-headless.png)
 
@@ -18,6 +18,8 @@ Most computer-use servers automate *your* screen: they move your real mouse, ste
 | **Can the app see your screen?** | No | Yes — everything you have open |
 | **Can it read your clipboard?** | Only if you let it (`clipboard_bridge`) | Yes |
 | **Safe for CI** | Yes | No |
+
+That column is wbox on Linux, and on Windows with `sandbox:` (Windows Sandbox). On Windows without it the app runs on your desktop, with none of this — see [Platform features](#platform-features).
 
 That combination is the whole point. If you only need to automate the machine you're staring at, a simpler server will do.
 
@@ -108,18 +110,24 @@ Two settings are worth knowing before you automate a real app:
 
 ## Platform features
 
-| Feature | Linux | Windows |
-|---------|-------|---------|
-| Screenshot | grim (pixel-perfect) | PrintWindow — works behind other windows |
-| Keyboard | wbox-keyboard (virtual keyboard) | SendInput (Unicode) / PostMessage |
-| Mouse | wbox-pointer (virtual pointer) | SendInput / PostMessage |
-| Clipboard | xclip + bridge to host | Win32 clipboard API — yours, shared; the sandbox's own with `sandbox:` |
-| Window management | wlrctl (list/focus) | Win32 (list/focus, which one is active) |
-| Resize display | wlr-randr | Resizes the window: its client area, to the pixel |
-| App isolation | Full (nested compositor) | With `sandbox:` (Windows Sandbox); **none** without |
-| Background operation | Yes (isolated display) | With `sandbox:`; without, screenshots only — most input takes focus |
-| Offscreen / headless | Yes (`headless: true`) | With `sandbox:`, the sandbox's window minimized; ignored without |
-| Interferes with host | No | Not with `sandbox:`; without, most clicks move your cursor and take focus |
+Windows has two modes, and they do not give the same thing: with `sandbox:` in config.yaml the app runs in Windows Sandbox; without it, on your desktop.
+
+| Feature | Linux | Windows, `sandbox:` | Windows, desktop |
+|---------|-------|---------------------|------------------|
+| Where the app runs | Nested Wayland compositor | Windows Sandbox, a throwaway Windows | Your desktop, an ordinary process |
+| App isolation | Full | Full — it gets the folders you mount, and no network unless asked | **None** |
+| Interferes with host | No | No | Most clicks move your cursor and take focus |
+| Background operation | Yes | Yes | Screenshots only — most input takes focus |
+| Offscreen / headless | Yes (`headless: true`) | The sandbox's window minimized (`headless: true`) | No — `headless` is ignored |
+| Screenshot | grim (pixel-perfect) | PrintWindow | PrintWindow — works behind other windows |
+| Keyboard | wbox-keyboard (virtual keyboard) | SendInput (Unicode) / PostMessage, the sandbox's keyboard | SendInput (Unicode) / PostMessage, yours |
+| Mouse | wbox-pointer (virtual pointer) | SendInput / PostMessage, the sandbox's pointer | SendInput / PostMessage, your pointer |
+| Clipboard | xclip + bridge to host (switchable) | The sandbox's own, never shared | Yours, shared with the app |
+| Window management | wlrctl (list/focus) | Win32 (list/focus) | Win32 (list/focus) |
+| Resize | The display (wlr-randr) | The window: its client area, to the pixel | The window: its client area, to the pixel |
+| `record` | Yes (not weston) | Yes — assembled on the host | Yes |
+| Start-up | Instant | About 15 s to boot; `keep: true` reuses it | Instant |
+| Needs | labwc, weston or cage | Windows 10/11 Pro, Enterprise or Education; one sandbox at a time | Windows 10+ |
 
 **Linux** — the app runs inside a nested Wayland compositor (labwc, weston or cage). Full isolation: the app cannot see or interfere with your desktop. Clipboard is bridged automatically, and you can switch that bridge off. Keyboard and mouse are injected through Wayland virtual-input protocols, so nothing leaks onto your own seat.
 
@@ -127,7 +135,20 @@ Set `headless: true` and the nested session runs offscreen — no window on your
 
 **Windows** — the app is driven through Win32 APIs. With `sandbox:` it runs in Windows Sandbox, a throwaway Windows of its own that boots in about 15 seconds: the pointer, keyboard and clipboard wbox uses are the sandbox's, and yours are left alone. Without it, the app runs as a normal process on your desktop: it shares your desktop and your clipboard, and most clicks warp your real mouse cursor and pull the window to the front. Screenshots work even when the window is covered.
 
-Two things are safer than they used to be. `type_text` types the characters and never touches your clipboard. And when the app window can't be brought to the front, `click`, `mouse_move` and key combos refuse and name the window that is in the way, instead of clicking it. Elevated apps remain largely off-limits. [docs/windows.md](docs/windows.md) has what was measured to work, the limitations, and troubleshooting.
+```yaml
+name: my-app
+compositor: win32          # auto-detected on Windows
+title_hint: "My App"       # substring of the window title, as localized
+sandbox:                   # leave this out to run on your desktop
+  mounts:
+    - {host: ./build, guest: 'C:\app', readonly: true}
+app:
+  command: 'C:\app\myapp.exe'
+```
+
+The sandbox is a fresh Windows: the app has to come from a folder you mount, and nothing you installed on the host is in it.
+
+On the desktop, two things keep it from harming you. `type_text` types the characters and never touches your clipboard. And when the app window can't be brought to the front, the calls that would press a real button or key — `click`, `dblclick`, `drag`, `scroll`, `hold`, `mouse_move`, key combos — refuse and name the window that is in the way, instead of clicking it. Elevated apps remain largely off-limits. [docs/windows.md](docs/windows.md) has what was measured to work, the limitations, and troubleshooting.
 
 ## MCP tools
 
@@ -167,7 +188,7 @@ sandbox's film is assembled on the host, where ffmpeg is.
 - [docs/usage.md](docs/usage.md) — CLI flags, config.yaml reference, MCP tools details, requirements
 - [docs/backends.md](docs/backends.md) — compositor comparison, input backends
 - [docs/matrix.md](docs/matrix.md) — what's verified to work on Linux, per compositor and backend
-- [docs/windows.md](docs/windows.md) — the Windows backend: install, input routing, measured status, limitations, troubleshooting
+- [docs/windows.md](docs/windows.md) — the Windows backend: Windows Sandbox, install, input routing, measured status, limitations, troubleshooting
 
 ## License
 
