@@ -713,6 +713,10 @@ class TestRenderOptions:
                 f"{compositor} started with gles2 on /dev/null: the control "
                 f"is void, so the next check would prove nothing"
             )
+            # It dies at once: a "timeout" message here was false, and hid
+            # wlroots' own reason (#3911, seen on the bench box)
+            assert "exited with code" in result["error"], result["error"]
+            assert "not a DRM render node" in result["error"], result["error"]
         finally:
             h.kill()
 

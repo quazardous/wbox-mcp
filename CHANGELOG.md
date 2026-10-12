@@ -32,6 +32,11 @@
 
 ### Fixed
 
+- **A compositor that dies during `launch` says why.** wbox reported "did
+  not appear in time (timeout=15s)" twenty milliseconds after the start,
+  and the compositor's own reason stayed in its log. The error now gives
+  its exit code and its last error lines — in a container, typically
+  `XDG_RUNTIME_DIR is unset`.
 - **Windows CI is green again: `screenshot` makes its folder** when
   `screenshot_dir` does not exist yet, instead of failing.
 - **Windows: `list_windows` and `focus_window` work.** They looked the

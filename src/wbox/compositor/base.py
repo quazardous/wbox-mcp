@@ -381,7 +381,7 @@ class CompositorServer:
             wayland_display = self._wait_for_wayland_display(wl_before, timeout=wl_timeout)
         if not wayland_display:
             return {
-                "error": f"{self.compositor_name} Wayland display did not appear in time (timeout={wl_timeout}s)",
+                "error": self._died_message() or f"{self.compositor_name} Wayland display did not appear in time (timeout={wl_timeout}s)",
                 "pid": self.state.compositor_proc.pid if self.state.compositor_proc else 0,
             }
         self.state.wayland_display = wayland_display
@@ -391,7 +391,7 @@ class CompositorServer:
         x_display = self._wait_for_xwayland(x11_before, timeout=xwl_timeout)
         if not x_display:
             return {
-                "error": f"Xwayland display did not appear in time (timeout={xwl_timeout}s)",
+                "error": self._died_message() or f"Xwayland display did not appear in time (timeout={xwl_timeout}s)",
                 "pid": self.state.compositor_proc.pid if self.state.compositor_proc else 0,
             }
         self.state.x_display = x_display
@@ -1614,6 +1614,27 @@ class CompositorServer:
     def _compositor_died(self) -> bool:
         proc = self.state.compositor_proc
         return proc is not None and proc.poll() is not None
+
+    def _died_message(self) -> str:
+        """Why the launch failed, when the compositor exited during it.
+
+        The waits stop as soon as it dies, so reporting a timeout there was
+        false — "did not appear in time (timeout=15s)" after 20 ms — and hid
+        the one line that says what went wrong (on a bench box:
+        "XDG_RUNTIME_DIR is unset"). Empty when it is still running.
+        """
+        if not self._compositor_died():
+            return ""
+        code = self.state.compositor_proc.returncode
+        msg = f"{self.compositor_name} exited with code {code} during launch"
+        log_file = getattr(self, "_log_file", None)
+        if log_file and log_file.exists():
+            lines = [l for l in log_file.read_text(errors="replace").splitlines()
+                     if "[ERROR]" in l][-5:]
+            if lines:
+                msg += ":\n" + "\n".join(lines)
+            msg += f"\n(full log: {log_file})"
+        return msg
 
     def _wait_for_named_socket(self, sock_path: Path, timeout: float = 10) -> str:
         """Wait for a specific socket file to appear."""
