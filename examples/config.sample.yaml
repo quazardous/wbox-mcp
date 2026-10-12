@@ -51,6 +51,18 @@ headless: false
 #
 clipboard_bridge: true
 
+# ── Renderer (labwc/cage) ──────────────────────────────────────────
+#
+# renderer: auto (default), pixman, gles2 or vulkan
+#   auto   — wlroots' choice, or WLR_RENDERER from the environment.
+#            Not deterministic with several GPUs (see docs/usage.md).
+#   pixman — CPU rendering: no GPU needed, reproducible screenshots.
+# render_device: absolute render node such as /dev/dri/renderD128.
+#   Requires renderer gles2 or vulkan.
+#
+# renderer: pixman
+# render_device: /dev/dri/renderD128
+
 # ── Weston-specific options (ignored by labwc/cage) ────────────────
 #
 # weston_shell: kiosk or desktop

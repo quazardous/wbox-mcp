@@ -33,8 +33,9 @@ class WestonCompositor(CompositorServer):
                  backend: str = "wayland", instance_name: str = "",
                  timeouts: dict | None = None, input_backend: str | dict = "x11",
                  undecorate: bool = True, keyboard_layout: str = "",
-                 headless: bool = False):
-        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend, undecorate=undecorate, keyboard_layout=keyboard_layout, headless=headless)
+                 headless: bool = False, renderer: str = "",
+                 render_device: str = ""):
+        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend, undecorate=undecorate, keyboard_layout=keyboard_layout, headless=headless, renderer=renderer, render_device=render_device)
         self.shell = shell
         self.backend = backend
         # Deterministic wayland socket name
@@ -105,7 +106,12 @@ class WestonCompositor(CompositorServer):
             # The headless backend defaults to the noop renderer, which draws
             # nothing: weston-screenshooter then waits forever on a capture
             # source the compositor never answers (not even with `failed`).
+            # build_compositor refuses any other renderer here.
             weston_cmd.insert(1, "--renderer=pixman")
+        elif self.renderer:
+            # weston calls its GLES renderer "gl"
+            name = {"gles2": "gl"}.get(self.renderer, self.renderer)
+            weston_cmd.insert(1, f"--renderer={name}")
 
         log.info("Launching weston: %s", " ".join(weston_cmd))
 

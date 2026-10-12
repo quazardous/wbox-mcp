@@ -187,6 +187,11 @@ keyboard_layout: ""        # XKB layout forced on the nested seat AND its
                            # host. Set "us" for reliable input injection: the
                            # wbox-keyboard backend sends us-position keycodes,
                            # and xdotool needs Xwayland and the seat to agree
+renderer: auto             # labwc/cage: auto, pixman, gles2 or vulkan.
+                           # auto = wlroots' choice, or WLR_RENDERER from
+                           # the environment. See "Choosing the renderer"
+render_device: ""          # labwc/cage: absolute render node, e.g.
+                           # /dev/dri/renderD128. Needs renderer gles2/vulkan
 
 log:
   dir: ./log
@@ -226,6 +231,35 @@ tools:
     description: "Build and deploy"
     timeout: 60
 ```
+
+### Choosing the renderer
+
+By default wbox leaves the renderer to wlroots, and `WLR_RENDERER` /
+`WLR_RENDER_DRM_DEVICE` from the environment reach the compositor unchanged.
+`renderer` and `render_device` in config.yaml set them explicitly and win
+over the environment.
+
+- **`pixman`** renders on the CPU. It needs no GPU, gives the most
+  reproducible pixels and the cheapest screenshots. Use it for tests that
+  mostly compare screenshots, and in containers.
+- **`gles2` / `vulkan`** render on a GPU, for apps that need GL or Vulkan
+  themselves. With `render_device`, on that node; without it, on the first
+  one wlroots finds.
+- **`auto` is not deterministic** where several GPUs are visible: wlroots
+  tries the nodes in enumeration order and falls back, with only a log
+  line, down to pixman. That is why `render_device` requires an explicit
+  `gles2` or `vulkan`: a node that cannot be used then fails the launch
+  instead of running on the CPU.
+
+`render_device` takes an absolute path. `/dev/dri/by-path/…` names are
+refused: a container granted a single node has no `by-path` directory.
+
+weston: `render_device` is refused, and headless weston runs on pixman
+only (any other renderer makes its screenshots hang). Nested weston maps
+`gles2` to its `gl` renderer.
+
+Both keys are fixed when the compositor starts: changing them needs a
+server restart, and `launch` refuses until then.
 
 ### Windows (Win32 backend)
 

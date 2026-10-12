@@ -131,7 +131,8 @@ class CompositorServer:
     def __init__(self, *, screen: str = "1280x800", instance_name: str = "",
                  timeouts: dict | None = None, input_backend: str | dict = "x11",
                  undecorate: bool = True, keyboard_layout: str = "",
-                 headless: bool = False):
+                 headless: bool = False, renderer: str = "",
+                 render_device: str = ""):
         from wbox.config import resolve_input_backend
         self.screen = screen
         self.instance_name = instance_name
@@ -140,6 +141,9 @@ class CompositorServer:
         self.undecorate = undecorate
         self.keyboard_layout = keyboard_layout
         self.headless = headless
+        # Validated by build_compositor; empty = leave it to wlroots/the env
+        self.renderer = renderer
+        self.render_device = render_device
         # Use instance name for state file if available, else compositor name
         state_id = instance_name or self.compositor_name
         self._state_file = Path(tempfile.gettempdir()) / f"wbox_{state_id}_state.json"
@@ -182,6 +186,18 @@ class CompositorServer:
             env["WLR_HEADLESS_OUTPUTS"] = "1"
         else:
             env["WLR_BACKENDS"] = "wayland"
+        # Set in config, these win over the environment (#3911). Left empty,
+        # whatever the environment carries reaches wlroots untouched.
+        if self.renderer:
+            env["WLR_RENDERER"] = self.renderer
+        if self.render_device:
+            if not os.path.exists(self.render_device):
+                # wlroots would fail with a generic EGL/DRM error, or worse,
+                # an auto renderer could end up elsewhere: name the key.
+                raise RuntimeError(
+                    f"render_device {self.render_device} does not exist "
+                    "here (is the GPU granted to this container?)")
+            env["WLR_RENDER_DRM_DEVICE"] = self.render_device
         return env
 
     @staticmethod

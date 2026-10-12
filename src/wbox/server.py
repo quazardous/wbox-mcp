@@ -35,6 +35,55 @@ from .config import apply_overrides, load_config, resolve_dir
 log = logging.getLogger(__name__)
 
 
+_RENDERERS = ("auto", "pixman", "gles2", "vulkan")
+
+
+def _render_options(cfg: dict, backend: str, headless: bool) -> tuple[str, str]:
+    """Validate `renderer` and `render_device` (#3911).
+
+    Both default to empty, which leaves wlroots to its own choice and lets
+    WLR_RENDERER / WLR_RENDER_DRM_DEVICE through from the environment, as
+    before. Anything the backend cannot honour is refused by name: running
+    on another renderer than the one asked for and reporting success is the
+    failure these keys exist to prevent.
+    """
+    renderer = cfg.get("renderer") or ""
+    device = cfg.get("render_device") or ""
+    if renderer == "auto":
+        renderer = ""
+    if renderer and renderer not in _RENDERERS:
+        raise ValueError(
+            f"renderer must be one of {', '.join(_RENDERERS)}, got {renderer!r}")
+    if device and not str(device).startswith("/"):
+        # by-path names only exist where the whole /dev/dri is mapped, which
+        # a container granted a single node does not have.
+        raise ValueError(
+            f"render_device must be an absolute node path such as "
+            f"/dev/dri/renderD128, got {device!r}")
+    if backend == "win32" and (renderer or device):
+        raise ValueError("renderer and render_device apply to the Linux "
+                         "compositors only, not to win32")
+    if backend == "weston":
+        if device:
+            raise ValueError("render_device is not supported on weston: its "
+                             "nested and headless backends take no render "
+                             "node; use labwc or cage")
+        if headless and renderer not in ("", "pixman"):
+            # See weston.py: anything but pixman headless ends with
+            # weston-screenshooter waiting forever.
+            raise ValueError(f"renderer {renderer!r} is not supported on "
+                             "headless weston, which only works with pixman; "
+                             "use labwc or cage for a GPU renderer")
+    if device and renderer not in ("gles2", "vulkan"):
+        # wlroots' auto choice falls back to pixman, with only a log line,
+        # when the node cannot be used; pixman never opens it at all. Either
+        # way the session would run on the CPU while the config names a GPU.
+        raise ValueError("render_device needs renderer: gles2 or vulkan — "
+                         "with auto, wlroots silently falls back to pixman "
+                         "when the node is unusable, and pixman ignores it")
+    return renderer, str(device)
+
+
 def build_compositor(cfg: dict) -> CompositorServer:
     """Build a compositor backend from config."""
     # Auto-detect backend on Windows if not specified
@@ -49,6 +98,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
     # "quiet" is accepted as an alias — it is how the feature was requested
     headless = bool(cfg.get("headless", cfg.get("quiet", False)))
     clipboard_bridge = bool(cfg.get("clipboard_bridge", True))
+    renderer, render_device = _render_options(cfg, backend, headless)
 
     if backend == "win32" and cfg.get("sandbox"):
         # The same backend, in Windows Sandbox (compositor/wsb.py).
@@ -82,6 +132,8 @@ def build_compositor(cfg: dict) -> CompositorServer:
             undecorate=undecorate,
             keyboard_layout=keyboard_layout,
             headless=headless,
+            renderer=renderer,
+            render_device=render_device,
         )
     elif backend == "labwc":
         from .compositor.labwc import LabwcCompositor
@@ -93,6 +145,8 @@ def build_compositor(cfg: dict) -> CompositorServer:
             undecorate=undecorate,
             keyboard_layout=keyboard_layout,
             headless=headless,
+            renderer=renderer,
+            render_device=render_device,
             clipboard_bridge=clipboard_bridge,
         )
         return comp
@@ -106,6 +160,8 @@ def build_compositor(cfg: dict) -> CompositorServer:
             undecorate=undecorate,
             keyboard_layout=keyboard_layout,
             headless=headless,
+            renderer=renderer,
+            render_device=render_device,
         )
 
 
@@ -115,7 +171,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
 _COMPOSITOR_KEYS = (
     "compositor", "screen", "name", "timeouts", "input_backend", "undecorate",
     "keyboard_layout", "clipboard_bridge", "title_hint",
-    "weston_shell", "weston_backend", "sandbox",
+    "weston_shell", "weston_backend", "sandbox", "renderer", "render_device",
 )
 
 

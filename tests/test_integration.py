@@ -114,8 +114,10 @@ class WboxTestHarness:
     """Manages a compositor + crash_dummy for testing."""
 
     def __init__(self, compositor: str, input_backend: str, app_mode: str,
-                 undecorate: bool = True, screen: str = "800x600", tag: str = ""):
+                 undecorate: bool = True, screen: str = "800x600", tag: str = "",
+                 extra_cfg: dict | None = None):
         self.compositor = compositor
+        self.extra_cfg = extra_cfg or {}
         self.input_backend = input_backend
         self.app_mode = app_mode
         self.undecorate = undecorate
@@ -165,6 +167,7 @@ class WboxTestHarness:
             },
             "_config_dir": str(CRASH_DUMMY_DIR),
         }
+        cfg.update(self.extra_cfg)
 
         self.comp = build_compositor(cfg)
 
@@ -606,6 +609,123 @@ class TestConfigReload:
         cfg = self._loaded(self._cfg(tmp_path))
         (tmp_path / "config.yaml").write_text("app: {command: [unclosed\n")
         assert _reload_cfg(cfg) is None
+
+
+class TestRenderOptions:
+    """#3911 — `renderer` and `render_device` in config.yaml.
+
+    The validation needs no compositor. The two launches do, and they are a
+    pair: an invalid WLR_RENDERER in the environment must break a launch
+    that leaves `renderer` unset, or the second launch — where the config's
+    renderer wins over that same environment — would prove nothing.
+    """
+
+    @staticmethod
+    def _opts(**kw):
+        from wbox.server import _render_options
+        backend = kw.pop("backend", "labwc")
+        headless = kw.pop("headless", True)
+        return _render_options(kw, backend, headless)
+
+    def test_defaults_leave_wlroots_alone(self):
+        assert self._opts() == ("", "")
+        assert self._opts(renderer="auto") == ("", "")
+
+    def test_known_renderers_pass(self):
+        for r in ("pixman", "gles2", "vulkan"):
+            assert self._opts(renderer=r) == (r, "")
+
+    def test_unknown_renderer_is_refused(self):
+        with pytest.raises(ValueError, match="renderer must be one of"):
+            self._opts(renderer="gl")
+
+    def test_by_path_name_is_refused(self):
+        """Absent from a container granted one node, so not accepted at all."""
+        with pytest.raises(ValueError, match="absolute node path"):
+            self._opts(render_device="pci-0000:00:02.0-render")
+
+    def test_render_device_needs_a_gpu_renderer(self):
+        """auto falls back to pixman silently on a bad node (wlroots 0.18+)."""
+        for r in (None, "auto", "pixman"):
+            with pytest.raises(ValueError, match="needs renderer"):
+                self._opts(renderer=r, render_device="/dev/dri/renderD128")
+        assert self._opts(renderer="vulkan", render_device="/dev/dri/renderD128") \
+            == ("vulkan", "/dev/dri/renderD128")
+
+    def test_headless_weston_refuses_a_gpu_renderer(self):
+        """Its noop/GL headless path hangs weston-screenshooter."""
+        with pytest.raises(ValueError, match="headless weston"):
+            self._opts(backend="weston", renderer="gles2")
+        assert self._opts(backend="weston", renderer="pixman") == ("pixman", "")
+        assert self._opts(backend="weston", headless=False,
+                          renderer="gles2") == ("gles2", "")
+
+    def test_weston_refuses_a_render_device(self):
+        with pytest.raises(ValueError, match="not supported on weston"):
+            self._opts(backend="weston", render_device="/dev/dri/renderD128")
+
+    def test_win32_refuses_both(self):
+        with pytest.raises(ValueError, match="win32"):
+            self._opts(backend="win32", renderer="pixman")
+
+    def test_both_keys_are_frozen_at_build(self):
+        """Left out of _COMPOSITOR_KEYS, an edit would be silently ignored."""
+        from wbox.server import _COMPOSITOR_KEYS
+        assert {"renderer", "render_device"} <= set(_COMPOSITOR_KEYS)
+
+    def test_config_maps_to_the_wlroots_env(self, monkeypatch):
+        from wbox.server import build_compositor
+        monkeypatch.setenv("WLR_RENDERER", "gles2")
+        monkeypatch.delenv("WLR_RENDER_DRM_DEVICE", raising=False)
+        comp = build_compositor({"compositor": "labwc", "headless": True,
+                                 "renderer": "vulkan",
+                                 "render_device": "/dev/null"})
+        env = comp._wlroots_env()
+        assert env["WLR_RENDERER"] == "vulkan"
+        assert env["WLR_RENDER_DRM_DEVICE"] == "/dev/null"
+        # unset in config: the environment passes through untouched
+        env = build_compositor({"compositor": "labwc",
+                                "headless": True})._wlroots_env()
+        assert env["WLR_RENDERER"] == "gles2"
+        assert "WLR_RENDER_DRM_DEVICE" not in env
+
+    def test_missing_render_device_is_named(self):
+        from wbox.server import build_compositor
+        comp = build_compositor({"compositor": "cage", "headless": True,
+                                 "renderer": "gles2",
+                                 "render_device": "/dev/dri/renderD999"})
+        with pytest.raises(RuntimeError, match="render_device /dev/dri/renderD999"):
+            comp._wlroots_env()
+
+    @pytest.mark.parametrize("compositor", ["labwc", "cage"])
+    def test_config_renderer_wins_over_the_env(self, compositor, monkeypatch):
+        _require_backend(compositor, "hybrid")
+        # An unknown WLR_RENDERER value is not a usable control: wlroots logs
+        # it and carries on with auto. An explicit gles2 on a node that is
+        # not one is fatal, and pixman never opens the node.
+        monkeypatch.setenv("WLR_RENDERER", "gles2")
+        monkeypatch.setenv("WLR_RENDER_DRM_DEVICE", "/dev/null")
+
+        h = WboxTestHarness(compositor, "hybrid", "normal", tag="badenv")
+        try:
+            result = h.launch()
+            assert "error" in result, (
+                f"{compositor} started with gles2 on /dev/null: the control "
+                f"is void, so the next check would prove nothing"
+            )
+        finally:
+            h.kill()
+
+        h = WboxTestHarness(compositor, "hybrid", "normal", tag="cfgrend",
+                            extra_cfg={"renderer": "pixman"})
+        try:
+            result = h.launch()
+            assert "error" not in result, f"launch failed: {result}"
+            shot = h.comp.screenshot()
+            assert "error" not in shot, shot
+            assert Path(shot["path"]).stat().st_size > 0
+        finally:
+            h.kill()
 
 
 class TestLaunch:

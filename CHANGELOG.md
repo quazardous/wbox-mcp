@@ -11,6 +11,14 @@
 
 ### Added
 
+- **`renderer` and `render_device` in config.yaml** (labwc, cage): choose
+  pixman, gles2 or vulkan, and the GPU to render on, instead of leaving it
+  to wlroots. Where several GPUs are visible — a bench box, a container —
+  wlroots' own choice depends on the order it finds them in and can fall
+  back to the CPU with only a log line. A `render_device` therefore needs
+  an explicit `gles2` or `vulkan`, so an unusable GPU fails the launch
+  rather than running on the CPU. Headless weston stays on pixman and
+  says so if asked for anything else.
 - **Windows: `scroll`, `dblclick`, `drag` and `hold`**, which returned an
   error there. They move the real pointer — the sandbox's with `sandbox:` —
   and refuse, like `click`, when the window cannot come to the front. `drag`
