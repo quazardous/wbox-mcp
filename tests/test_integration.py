@@ -697,6 +697,31 @@ class TestRenderOptions:
         with pytest.raises(RuntimeError, match="render_device /dev/dri/renderD999"):
             comp._wlroots_env()
 
+    def test_an_output_less_compositor_is_a_failed_launch(self, tmp_path, monkeypatch):
+        """Seen on the bench box: labwc up, output disabled (gbm refused).
+
+        launch said "running" and the first screenshot failed. The check
+        reads wlr-randr; a compositor reporting no enabled output must name
+        the compositor's own errors, and one reporting it must pass.
+        """
+        import subprocess
+        from wbox.server import build_compositor
+        comp = build_compositor({"compositor": "labwc", "headless": True})
+        comp.set_log_dir(tmp_path)
+        (tmp_path / "labwc-compositor.log").write_text(
+            "00:00:00.4 [ERROR] [render/allocator/gbm.c:118] "
+            "gbm_bo_create failed: Permission denied\n")
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/wlr-randr")
+        disabled = 'HEADLESS-1 "Headless output 1"\n  Enabled: no\n'
+        monkeypatch.setattr(comp, "_run_cmd", lambda *a, **k:
+                            subprocess.CompletedProcess(a, 0, disabled, ""))
+        err = comp._output_error()
+        assert "no usable output" in err and "gbm_bo_create" in err, err
+        enabled = disabled.replace("Enabled: no", "Enabled: yes")
+        monkeypatch.setattr(comp, "_run_cmd", lambda *a, **k:
+                            subprocess.CompletedProcess(a, 0, enabled, ""))
+        assert comp._output_error() == ""
+
     @pytest.mark.parametrize("compositor", ["labwc", "cage"])
     def test_config_renderer_wins_over_the_env(self, compositor, monkeypatch):
         _require_backend(compositor, "hybrid")

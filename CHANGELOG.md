@@ -7,6 +7,17 @@
   Format: https://semver.org
 -->
 
+## [Unreleased]
+
+### Fixed
+
+- **`launch` fails when the compositor has no usable output.** A labwc or
+  cage that cannot allocate its output's buffers keeps running with the
+  output off: `launch` answered "running" and only the first screenshot
+  failed, with "no wl_output". It now fails at once, with the compositor's
+  own errors, and stops the compositor. Seen on a bench box whose NVIDIA
+  driver refused the allocations.
+
 ## [0.11.0] - 2026-10-12
 
 ### Added
