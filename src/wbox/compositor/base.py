@@ -280,6 +280,32 @@ class CompositorServer:
         else:
             log.warning("wlr-randr failed: %s", result.stderr.strip())
 
+    def _output_error(self) -> str:
+        """Why the compositor has no usable output, or "" when it has one.
+
+        A wlroots compositor that cannot allocate its output's buffers keeps
+        running with the output disabled: launch used to report success, and
+        only the first screenshot failed ("no wl_output"). Seen on a bench box
+        whose GPU refused allocations (gbm_bo_create: Permission denied).
+        Only labwc and cage answer wlr-randr; the others are not checked.
+        """
+        if self.compositor_name not in ("labwc", "cage") or not shutil.which("wlr-randr"):
+            return ""
+        env = os.environ.copy()
+        env["WAYLAND_DISPLAY"] = self.state.wayland_display
+        result = self._run_cmd(["wlr-randr"], env=env, timeout=5)
+        if result.returncode == 0 and re.search(r"^\s*Enabled: yes", result.stdout, re.M):
+            return ""
+        msg = f"{self.compositor_name} started but has no usable output"
+        log_file = getattr(self, "_log_file", None)
+        if log_file and log_file.exists():
+            lines = [l for l in log_file.read_text(errors="replace").splitlines()
+                     if "[ERROR]" in l][:5]
+            if lines:
+                msg += ":\n" + "\n".join(lines)
+            msg += f"\n(full log: {log_file})"
+        return msg
+
     def _post_app_start(self) -> None:
         """Hook called after app has rendered (after app_render wait)."""
         pass
@@ -399,6 +425,13 @@ class CompositorServer:
 
         # Hook for post-compositor setup (e.g. resize nested window)
         self._post_compositor_start()
+
+        no_output = self._output_error()
+        if no_output:
+            pid = self.state.compositor_proc.pid if self.state.compositor_proc else 0
+            # Left running, the next launch would answer "already_running"
+            self.kill(aggressive=True)
+            return {"error": no_output, "pid": pid}
 
         # Launch app into compositor (no-op for cage)
         self._start_app(app_cmd, app_env)
