@@ -3,6 +3,8 @@ name = "wbox-mcp"
 dynamic = ["version"]
 description = "Wayland/X11 box — nested compositor MCP server for GUI automation"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "jsonschema>=4.20",
     "mcp>=2.3,<3",
@@ -20,7 +22,7 @@ wboxr = "wbox.cli.registry:main"
 wbox-mcp = "wbox.cli.server:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.dynamic]

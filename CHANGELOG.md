@@ -9,6 +9,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **LICENSE file.** wbox-mcp was always meant to be MIT, as the README
+  said, but the repository carried no license text, so GitHub and package
+  tools reported no license. The MIT text is now in `LICENSE` and declared
+  in the package metadata; it covers all code published so far.
+
 ### Changed
 
 - **Built on MCP Python SDK 2.x.** The dependency used to allow any `mcp`
