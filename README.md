@@ -171,4 +171,4 @@ sandbox's film is assembled on the host, where ffmpeg is.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
