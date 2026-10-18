@@ -11,6 +11,12 @@
 
 ### Fixed
 
+- **A fresh install no longer breaks on MCP SDK 2.x.** The dependency
+  allowed any `mcp` from 1.0 on, so a clean install picked up 2.x, which
+  dropped the server API wbox is built on: `wbox-mcp` crashed at startup
+  with "'Server' object has no attribute 'list_tools'". It is now held
+  below 2.
+
 - **`launch` fails when the compositor has no usable output.** A labwc or
   cage that cannot allocate its output's buffers keeps running with the
   output off: `launch` answered "running" and only the first screenshot
