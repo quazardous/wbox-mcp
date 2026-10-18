@@ -9,13 +9,17 @@
 
 ## [Unreleased]
 
-### Fixed
+### Changed
 
-- **A fresh install no longer breaks on MCP SDK 2.x.** The dependency
-  allowed any `mcp` from 1.0 on, so a clean install picked up 2.x, which
-  dropped the server API wbox is built on: `wbox-mcp` crashed at startup
-  with "'Server' object has no attribute 'list_tools'". It is now held
-  below 2.
+- **Built on MCP Python SDK 2.x.** The dependency used to allow any `mcp`
+  from 1.0 on, so a clean install picked up 2.x, which dropped the server
+  API wbox was built on: `wbox-mcp` crashed at startup with "'Server'
+  object has no attribute 'list_tools'". wbox now runs on the 2.x API and
+  requires `mcp>=2.3,<3`. Nothing changes for MCP clients: tools, argument
+  checks and error results behave as before, and older clients still
+  connect. Re-run the installer to update.
+
+### Fixed
 
 - **`launch` fails when the compositor has no usable output.** A labwc or
   cage that cannot allocate its output's buffers keeps running with the

@@ -4,7 +4,8 @@ dynamic = ["version"]
 description = "Wayland/X11 box — nested compositor MCP server for GUI automation"
 requires-python = ">=3.10"
 dependencies = [
-    "mcp>=1.0,<2",
+    "jsonschema>=4.20",
+    "mcp>=2.3,<3",
     "pyyaml>=6.0",
 ]
 

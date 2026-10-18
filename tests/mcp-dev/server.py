@@ -23,12 +23,10 @@ import yaml
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import ImageContent, TextContent, Tool
+from mcp.types import CallToolResult, ImageContent, ListToolsResult, TextContent, Tool
 
 TESTS_DIR = Path(__file__).resolve().parent.parent
 CRASH_DUMMY_PY = TESTS_DIR / "crash-dummy" / "crash_dummy.py"
-
-server = Server("mcp-dev")
 
 # ── Shared state ──
 
@@ -168,7 +166,6 @@ def _text(msg) -> list:
 
 # ── MCP Tools ──
 
-@server.list_tools()
 async def list_tools():
     return [
         Tool(
@@ -255,7 +252,6 @@ async def list_tools():
     ]
 
 
-@server.call_tool()
 async def call_tool(name: str, arguments: dict):
     global _worker, _config
 
@@ -359,6 +355,20 @@ async def call_tool(name: str, arguments: dict):
 
     result = await _worker.call(name, **arguments)
     return _text(result)
+
+
+async def on_list_tools(ctx, params) -> ListToolsResult:
+    return ListToolsResult(tools=await list_tools())
+
+
+async def on_call_tool(ctx, params) -> CallToolResult:
+    try:
+        return CallToolResult(content=await call_tool(params.name, params.arguments or {}))
+    except Exception as e:
+        return CallToolResult(content=_text(f"Error: {e}"), isError=True)
+
+
+server = Server("mcp-dev", on_list_tools=on_list_tools, on_call_tool=on_call_tool)
 
 
 async def main():

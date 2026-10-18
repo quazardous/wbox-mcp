@@ -19,10 +19,15 @@ import subprocess
 from collections import deque
 from pathlib import Path
 
-from mcp.server import Server
+import jsonschema
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
     ImageContent,
+    ListToolsResult,
+    PaginatedRequestParams,
     TextContent,
     Tool,
 )
@@ -455,13 +460,9 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
     wbox_logger.addHandler(file_handler)
     wbox_logger.setLevel(getattr(logging, log_level, logging.INFO))
 
-    server_name = cfg.get("name", "wbox-mcp")
-    mcp = Server(server_name)
-
     # Pre-launch hooks from config
     pre_launch_scripts = cfg.get("app", {}).get("pre_launch", [])
 
-    @mcp.list_tools()
     async def list_tools() -> list[Tool]:
         tools = [
             Tool(
@@ -879,7 +880,6 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
 
         return tools
 
-    @mcp.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageContent]:
         log.info("tool_call: %s %s", name, arguments or "")
 
@@ -1141,7 +1141,40 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
 
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
+    async def on_list_tools(
+        ctx: ServerRequestContext, params: PaginatedRequestParams | None
+    ) -> ListToolsResult:
+        return ListToolsResult(tools=await list_tools())
+
+    async def on_call_tool(
+        ctx: ServerRequestContext, params: CallToolRequestParams
+    ) -> CallToolResult:
+        # The 1.x SDK decorator checked the arguments against the tool's
+        # schema and turned a raising tool into an error result; 2.x leaves
+        # both to the handler, so they are kept here.
+        name, arguments = params.name, params.arguments or {}
+        tool = next((t for t in await list_tools() if t.name == name), None)
+        if tool is not None:
+            try:
+                jsonschema.validate(instance=arguments, schema=tool.input_schema)
+            except jsonschema.ValidationError as e:
+                return _error_result(f"Input validation error: {e.message}")
+        try:
+            return CallToolResult(content=await call_tool(name, arguments))
+        except Exception as e:
+            log.exception("tool %s failed", name)
+            return _error_result(str(e))
+
+    mcp = Server(
+        cfg.get("name", "wbox-mcp"),
+        on_list_tools=on_list_tools,
+        on_call_tool=on_call_tool,
+    )
     return mcp, compositor
+
+
+def _error_result(text: str) -> CallToolResult:
+    return CallToolResult(content=[TextContent(type="text", text=text)], isError=True)
 
 
 async def amain(config_path: str | None = None, overrides: list[str] | None = None):
