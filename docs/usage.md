@@ -192,6 +192,8 @@ renderer: auto             # labwc/cage: auto, pixman, gles2 or vulkan.
                            # the environment. See "Choosing the renderer"
 render_device: ""          # labwc/cage: absolute render node, e.g.
                            # /dev/dri/renderD128. Needs renderer gles2/vulkan
+audio: ""                  # null, capture or host. Default: null when
+                           # headless, host otherwise. See "Audio"
 
 log:
   dir: ./log
@@ -261,6 +263,34 @@ only (any other renderer makes its screenshots hang). Nested weston maps
 Both keys are fixed when the compositor starts: changing them needs a
 server restart, and `launch` refuses until then.
 
+### Audio
+
+The display is nested; sound is not, unless you ask. With `audio: host` the
+app plays on your desktop's speakers, as any program would. With `null` or
+`capture`, wbox starts a private audio server for the session — PipeWire, a
+null sink, WirePlumber without any hardware monitor, and pipewire-pulse —
+and points the app at it (`PULSE_SERVER`, `PIPEWIRE_RUNTIME_DIR`). Players
+find a working device; the sound goes nowhere.
+
+- **`null`** — the default for headless sessions: an unattended run that
+  plays a video stays quiet.
+- **`capture`** — the same, and the sound is recorded to `audio-<time>.wav`
+  next to the screenshots. The `audio` tool reports its length and its RMS
+  and peak level (0..1), for the whole capture or its last N seconds, so a
+  test can check that a video made sound, or that it stayed silent.
+- **`host`** — the default for visible sessions: the desktop's speakers.
+
+Covered: Pulse, native PipeWire, ALSA's `default` device (pipewire-alsa),
+GStreamer. **Not covered:** an app that opens an ALSA hardware device
+(`hw:0`) itself bypasses every audio server. On a desktop that device is
+normally held by your own PipeWire, so the open fails as busy; in a
+container `/dev/snd` is usually not granted.
+
+`null` and `capture` need `pipewire`, `wireplumber` and `pipewire-pulse`
+(and `pw-record` for capture). If one is missing the launch fails and names
+it — it never falls back to your speakers. Linux only: on Windows, `audio`
+must stay `host`. Fixed when the compositor starts, like `headless`.
+
 ### Windows (Win32 backend)
 
 Several Linux keys (`headless`, `screen`, `input_backend`, …) are accepted but ignored here — [windows.md](windows.md#keys-that-do-nothing-on-windows) has the list.
@@ -301,6 +331,8 @@ See also [`examples/config.sample.yaml`](../examples/config.sample.yaml) for a c
 System dependencies are installed automatically by `setup.sh`.
 
 **Required:** `labwc`, `grim`, `xdotool`, `setxkbmap`, `wlr-randr`, `wlrctl`, `python3`, `uv`, `git`
+
+**For `audio: null` / `capture`** (the headless default): `pipewire`, `wireplumber`, `pipewire-pulse`, `pipewire-alsa`
 
 **Optional:** `weston`, `cage`, `weston-screenshooter`, `xclip`/`xsel`, `wl-clipboard`, `ydotool`, `wtype`
 

@@ -7,6 +7,28 @@
   Format: https://semver.org
 -->
 
+## [Unreleased]
+
+### Added
+
+- **`audio:` — an app's sound stays in the box** (#4702). wbox kept an app's
+  windows off the desktop but not its sound: a video played during an
+  unattended run came out of your speakers. With `audio: null`, now the
+  default for headless sessions, the session gets its own audio server whose
+  sound goes nowhere — players still find a working device. `audio: capture`
+  also records it, and the new `audio` tool tells how loud it was, so a test
+  can check that a video made sound without anyone listening. `host` keeps
+  today's behaviour, and stays the default for visible sessions.
+
+### Changed
+
+- **Headless sessions now need PipeWire** (`pipewire`, `wireplumber`,
+  `pipewire-pulse`, `pipewire-alsa`), because they default to `audio: null`.
+  Where they are missing the launch fails and says which — it does not fall
+  back to the desktop's speakers. Install them, or set `audio: host` to keep
+  the old behaviour. Container images running wbox headless (bench boxes)
+  need the packages added.
+
 ## [0.12.0] - 2026-10-18
 
 ### Added

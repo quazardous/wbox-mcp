@@ -132,7 +132,7 @@ class CompositorServer:
                  timeouts: dict | None = None, input_backend: str | dict = "x11",
                  undecorate: bool = True, keyboard_layout: str = "",
                  headless: bool = False, renderer: str = "",
-                 render_device: str = ""):
+                 render_device: str = "", audio: str = "host"):
         from wbox.config import resolve_input_backend
         self.screen = screen
         self.instance_name = instance_name
@@ -144,6 +144,9 @@ class CompositorServer:
         # Validated by build_compositor; empty = leave it to wlroots/the env
         self.renderer = renderer
         self.render_device = render_device
+        # Validated by build_compositor: null, capture or host (#4702)
+        self.audio = audio
+        self._audio = None  # the session's AudioSandbox, while it runs
         # Use instance name for state file if available, else compositor name
         state_id = instance_name or self.compositor_name
         self._state_file = Path(tempfile.gettempdir()) / f"wbox_{state_id}_state.json"
@@ -349,6 +352,7 @@ class CompositorServer:
         env["WAYLAND_DISPLAY"] = self.state.wayland_display
         if self.state.x_display:
             env["DISPLAY"] = self.state.x_display
+        self._apply_audio_env(env)
         env.update(app_env)
 
         log.info("Launching app in %s: %s", self.compositor_name, " ".join(app_cmd))
@@ -369,6 +373,56 @@ class CompositorServer:
         app_env: dict[str, str] | None = None,
     ) -> dict:
         """Start the compositor with the app inside."""
+        if self.is_running():
+            return self._launch(app_cmd, app_env)
+        try:
+            self._start_audio()
+        except RuntimeError as e:
+            return {"error": str(e)}
+        try:
+            result = self._launch(app_cmd, app_env)
+        except BaseException:
+            self._stop_audio()
+            raise
+        if "error" in result:
+            self._stop_audio()
+        return result
+
+    def _start_audio(self) -> None:
+        """The session's own audio server, before anything can play (#4702)."""
+        if self.audio == "host" or self._audio is not None:
+            return
+        from wbox.audio import AudioSandbox
+        sandbox = AudioSandbox(self.audio, self.state.screenshot_dir)
+        sandbox.start()
+        self._audio = sandbox
+
+    def _stop_audio(self) -> None:
+        if self._audio is not None:
+            self._audio.stop()
+            # kept for audio_stats(): a capture is read after the session too
+            self._last_audio, self._audio = self._audio, None
+
+    def _apply_audio_env(self, env: dict[str, str]) -> None:
+        if self._audio is not None:
+            self._audio.apply(env)
+
+    def audio_stats(self, seconds: float | None = None) -> dict:
+        """Level of the sound the app played, from the session's capture."""
+        sandbox = self._audio or getattr(self, "_last_audio", None)
+        if sandbox is None:
+            if self.audio == "host":
+                return {"error": "audio is host: the app plays on the "
+                                 "desktop, nothing is captured "
+                                 "(set audio: capture)"}
+            return {"error": "no session has run yet"}
+        return sandbox.stats(seconds)
+
+    def _launch(
+        self,
+        app_cmd: list[str],
+        app_env: dict[str, str] | None = None,
+    ) -> dict:
         if self.is_running():
             pid = self.state.compositor_pid or (
                 self.state.compositor_proc.pid if self.state.compositor_proc else 0
@@ -617,6 +671,7 @@ class CompositorServer:
         """Extra cleanup shared by stop() and kill(). Subclasses extend this."""
         self._vptr_close()
         self._stop_clipboard_owner()
+        self._stop_audio()
 
     def is_running(self) -> bool:
         if self.state.compositor_proc is not None:

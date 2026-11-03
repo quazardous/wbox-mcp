@@ -757,6 +757,141 @@ class TestRenderOptions:
             h.kill()
 
 
+class TestAudio:
+    """#4702 — an app's sound must not reach the desktop's speakers.
+
+    No real desktop audio server is needed (CI has none): the test starts its
+    own "desktop", a capturing audio server, and points the environment wbox
+    inherits at it — the same way a real desktop's server is found. `host`
+    is the control: the tone must reach that desktop, or the two checks that
+    say it did not would prove nothing.
+    """
+
+    COMBOS = [("labwc", "hybrid"), ("cage", "hybrid"), ("weston", "x11")]
+
+    @staticmethod
+    def _require_audio_tools():
+        missing = [t for t in ("pipewire", "wireplumber", "pipewire-pulse",
+                               "pw-record", "paplay", "pactl", "aplay")
+                   if not shutil.which(t)]
+        if missing:
+            pytest.fail(f"audio tests need {', '.join(missing)}: install "
+                        "pipewire, wireplumber, pipewire-pulse, pipewire-alsa, "
+                        "pulseaudio-utils and alsa-utils")
+
+    @staticmethod
+    def _tone(path, seconds=1.0, amplitude=0.5):
+        import array, math, wave
+        rate = 48000
+        frames = array.array("h")
+        for i in range(int(rate * seconds)):
+            v = int(amplitude * 32767 * math.sin(2 * math.pi * 440 * i / rate))
+            frames.extend((v, v))
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(2); w.setsampwidth(2); w.setframerate(rate)
+            w.writeframes(frames.tobytes())
+        return path
+
+    @pytest.fixture
+    def desktop(self, tmp_path, monkeypatch):
+        """A stand-in for the desktop's audio server, recording what it hears."""
+        from wbox.audio import AudioSandbox
+        self._require_audio_tools()
+        desk = AudioSandbox("capture", tmp_path / "desktop")
+        desk.start()
+        monkeypatch.setenv("PULSE_SERVER", f"unix:{desk.dir}/pulse/native")
+        monkeypatch.setenv("PIPEWIRE_RUNTIME_DIR", str(desk.dir))
+        monkeypatch.setenv("PIPEWIRE_REMOTE", "pipewire-0")
+        yield desk
+        desk.stop()
+
+    def _play(self, compositor, backend, mode, tmp_path):
+        """A session whose app plays a tone through Pulse, then through ALSA."""
+        from wbox.server import build_compositor
+        _require_backend(compositor, backend)
+        tone = self._tone(tmp_path / "tone.wav")
+        out = tmp_path / f"session-{mode}"
+        out.mkdir()
+        comp = build_compositor({
+            "name": f"test-audio-{compositor}-{mode}", "compositor": compositor,
+            "screen": "640x480", "input_backend": backend, "headless": True,
+            "keyboard_layout": "us", "clipboard_bridge": False, "audio": mode,
+            "timeouts": {"wayland_display": 10, "xwayland_display": 15,
+                         "app_render": 1, "stop": 5},
+        })
+        if hasattr(comp, "set_log_dir"):
+            comp.set_log_dir(out)
+        comp.state.screenshot_dir = out
+        done = out / "sinks.txt"
+        script = (f"sleep 0.3; paplay {tone}; aplay -q {tone}; "
+                  f"pactl list short sinks > {done}.tmp; mv {done}.tmp {done}; "
+                  "sleep 60")
+        try:
+            r = comp.launch(["sh", "-c", script], {})
+            assert "error" not in r, r
+            deadline = time.monotonic() + 15
+            while not done.exists() and time.monotonic() < deadline:
+                time.sleep(0.1)
+            assert done.exists(), "the app never finished playing"
+            time.sleep(1.2)  # a stretch of silence after the tones
+            during = comp.audio_stats()
+            tail = comp.audio_stats(1)
+        finally:
+            comp.kill(aggressive=True)
+        return done.read_text(), during, tail
+
+    def test_mode_validation(self):
+        from wbox.server import _audio_mode
+        assert _audio_mode({}, "labwc", True) == "null"
+        assert _audio_mode({}, "labwc", False) == "host"
+        assert _audio_mode({"audio": "capture"}, "cage", False) == "capture"
+        with pytest.raises(ValueError, match="audio must be one of"):
+            _audio_mode({"audio": "mute"}, "labwc", True)
+        with pytest.raises(ValueError, match="win32"):
+            _audio_mode({"audio": "null"}, "win32", True)
+        assert _audio_mode({}, "win32", True) == "host"
+
+    def test_audio_is_frozen_at_build(self):
+        from wbox.server import _COMPOSITOR_KEYS
+        assert "audio" in _COMPOSITOR_KEYS
+
+    def test_missing_daemons_fail_the_launch(self, monkeypatch):
+        """Never a quiet fallback to the desktop's speakers."""
+        from wbox.server import build_compositor
+        comp = build_compositor({"compositor": "labwc", "headless": True})
+        real_which = shutil.which
+        monkeypatch.setattr("shutil.which", lambda name, *a, **k:
+                            None if name == "wireplumber" else real_which(name, *a, **k))
+        r = comp.launch(["true"], {})
+        assert "error" in r and "wireplumber" in r["error"], r
+        assert not comp.is_running()
+
+    @pytest.mark.parametrize("compositor,backend", COMBOS, ids=combo_id)
+    def test_host_reaches_the_desktop(self, compositor, backend, desktop, tmp_path):
+        """The control: today's behaviour, and proof the desktop can hear."""
+        self._play(compositor, backend, "host", tmp_path)
+        heard = desktop.stats()
+        assert heard["peak"] > 0.4, f"the stand-in desktop heard nothing: {heard}"
+
+    @pytest.mark.parametrize("compositor,backend", COMBOS, ids=combo_id)
+    def test_null_plays_nowhere(self, compositor, backend, desktop, tmp_path):
+        sinks, _, _ = self._play(compositor, backend, "null", tmp_path)
+        assert [l.split()[1] for l in sinks.splitlines()] == ["wbox-null"], sinks
+        heard = desktop.stats()
+        assert heard["silent"], f"the desktop heard the app: {heard}"
+
+    @pytest.mark.parametrize("compositor,backend", COMBOS, ids=combo_id)
+    def test_capture_measures_sound_and_silence(self, compositor, backend,
+                                                desktop, tmp_path):
+        _, during, tail = self._play(compositor, backend, "capture", tmp_path)
+        # A 0.5-amplitude sine: peak 0.5, RMS 0.354 while it plays
+        assert 0.45 < during["peak"] < 0.55, during
+        assert not during["silent"], during
+        assert tail["silent"], f"the last second should be silence: {tail}"
+        assert desktop.stats()["silent"], "capture must not reach the desktop either"
+        assert Path(during["path"]).suffix == ".wav"
+
+
 class TestLaunch:
     """Verify compositor launches correctly."""
 

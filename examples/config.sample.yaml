@@ -63,6 +63,17 @@ clipboard_bridge: true
 # renderer: pixman
 # render_device: /dev/dri/renderD128
 
+# ── Audio ──────────────────────────────────────────────────────────
+#
+# audio: null, capture or host
+#   null    — a private audio server whose sound goes nowhere.
+#             Default when headless.
+#   capture — the same, recorded to audio-<time>.wav next to the
+#             screenshots; the `audio` tool reports its level.
+#   host    — the desktop's speakers. Default when visible.
+#
+# audio: capture
+
 # ── Weston-specific options (ignored by labwc/cage) ────────────────
 #
 # weston_shell: kiosk or desktop

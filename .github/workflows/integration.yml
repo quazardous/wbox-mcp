@@ -56,7 +56,17 @@ jobs:
             x11-utils \
             x11-xkb-utils \
             python3-tk \
-            xvfb
+            xvfb \
+            pipewire \
+            pipewire-pulse \
+            pipewire-alsa \
+            wireplumber \
+            pulseaudio-utils \
+            alsa-utils
+        # The audio tools since #4702: headless sessions start their own
+        # audio server (audio: null), and TestAudio plays through Pulse and
+        # ALSA to prove the sound stays inside. A runner without them must
+        # fail those tests, not skip them.
         # wlrctl earns its place since #3205: focus_window still shells out to
         # it, and TestWindowState exercises that. list_windows no longer does
         # — it reads the foreign-toplevel protocol directly — so converting

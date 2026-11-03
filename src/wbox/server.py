@@ -89,6 +89,25 @@ def _render_options(cfg: dict, backend: str, headless: bool) -> tuple[str, str]:
     return renderer, str(device)
 
 
+def _audio_mode(cfg: dict, backend: str, headless: bool) -> str:
+    """`audio`: null, capture or host (#4702).
+
+    Headless sessions default to null — nobody is watching, so nobody should
+    be hearing either, and unattended runs must not play on the desktop's
+    speakers. A visible session defaults to host, as before.
+    """
+    mode = cfg.get("audio") or ("null" if headless else "host")
+    from .audio import MODES
+    if mode not in MODES:
+        raise ValueError(f"audio must be one of {', '.join(MODES)}, got {mode!r}")
+    if backend == "win32":
+        if cfg.get("audio") not in (None, "", "host"):
+            raise ValueError("audio: null and capture apply to the Linux "
+                             "compositors only, not to win32")
+        return "host"
+    return mode
+
+
 def build_compositor(cfg: dict) -> CompositorServer:
     """Build a compositor backend from config."""
     # Auto-detect backend on Windows if not specified
@@ -104,6 +123,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
     headless = bool(cfg.get("headless", cfg.get("quiet", False)))
     clipboard_bridge = bool(cfg.get("clipboard_bridge", True))
     renderer, render_device = _render_options(cfg, backend, headless)
+    audio = _audio_mode(cfg, backend, headless)
 
     if backend == "win32" and cfg.get("sandbox"):
         # The same backend, in Windows Sandbox (compositor/wsb.py).
@@ -139,6 +159,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
             headless=headless,
             renderer=renderer,
             render_device=render_device,
+            audio=audio,
         )
     elif backend == "labwc":
         from .compositor.labwc import LabwcCompositor
@@ -152,6 +173,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
             headless=headless,
             renderer=renderer,
             render_device=render_device,
+            audio=audio,
             clipboard_bridge=clipboard_bridge,
         )
         return comp
@@ -167,6 +189,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
             headless=headless,
             renderer=renderer,
             render_device=render_device,
+            audio=audio,
         )
 
 
@@ -177,6 +200,7 @@ _COMPOSITOR_KEYS = (
     "compositor", "screen", "name", "timeouts", "input_backend", "undecorate",
     "keyboard_layout", "clipboard_bridge", "title_hint",
     "weston_shell", "weston_backend", "sandbox", "renderer", "render_device",
+    "audio",
 )
 
 
@@ -525,6 +549,25 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                         },
                     },
                     "required": ["x", "y"],
+                },
+            ),
+            Tool(
+                name="audio",
+                description=(
+                    "How loud the app's sound was, with audio: capture. "
+                    "Returns the WAV being recorded, its length, and the RMS "
+                    "and peak level (0..1) of the whole capture or of its "
+                    "last seconds — enough to check that a video made sound, "
+                    "or that a muted one stayed silent, without listening."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "seconds": {
+                            "type": "number",
+                            "description": "Only the last N seconds; omit for the whole capture",
+                        },
+                    },
                 },
             ),
             Tool(
@@ -972,6 +1015,11 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 ImageContent(type="image", data=img_data, mimeType="image/png"),
                 TextContent(type="text", text=result["path"]),
             ]
+
+        if name == "audio":
+            result = await asyncio.to_thread(
+                compositor.audio_stats, arguments.get("seconds"))
+            return _reply(result)
 
         if name == "record":
             result = await asyncio.to_thread(

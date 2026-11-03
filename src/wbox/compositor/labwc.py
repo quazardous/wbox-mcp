@@ -33,8 +33,8 @@ class LabwcCompositor(CompositorServer):
                  timeouts: dict | None = None, input_backend: str | dict = "x11",
                  undecorate: bool = True, keyboard_layout: str = "",
                  headless: bool = False, renderer: str = "",
-                 render_device: str = "", clipboard_bridge: bool = True):
-        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend, undecorate=undecorate, keyboard_layout=keyboard_layout, headless=headless, renderer=renderer, render_device=render_device)
+                 render_device: str = "", audio: str = "host", clipboard_bridge: bool = True):
+        super().__init__(screen=screen, instance_name=instance_name, timeouts=timeouts, input_backend=input_backend, undecorate=undecorate, keyboard_layout=keyboard_layout, headless=headless, renderer=renderer, render_device=render_device, audio=audio)
         self.clipboard_bridge = clipboard_bridge
         # labwc doesn't support deterministic socket naming — use diff-based detection
         self.wayland_socket_name = ""
