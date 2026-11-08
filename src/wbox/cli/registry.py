@@ -27,6 +27,7 @@ Init options (non-interactive mode):
     --mcp-dir DIR            Explicit directory for config/log/screenshots
     --from FILE              Load config from a YAML template
     --register               Auto-register in .mcp.json after init
+    --update-claude-settings Also add a wildcard permission to Claude settings
 
 If no directory or --mcp-dir is given:
     - In a project root (.git, pyproject.toml, etc.) → defaults to ./wbox
@@ -120,9 +121,12 @@ def _resolve_config_path(directory: str | None) -> Path:
 
 def _detect_wbox_command() -> tuple[str, list[str]]:
     """Detect the best way to invoke wbox-mcp."""
-    # 1. Installed mode — wbox-mcp on PATH
-    if shutil.which("wbox-mcp"):
-        return "wbox-mcp", ["serve"]
+    # 1. Installed mode — wbox-mcp on PATH, written as an absolute path: an
+    #    MCP client started with another PATH (a desktop app without
+    #    ~/.local/bin) could not find a bare name (#11)
+    found = shutil.which("wbox-mcp")
+    if found:
+        return str(Path(found).resolve()), ["serve"]
     # 2. Dev mode — absolute path to venv binary
     venv_bin = Path(sys.executable).parent / "wbox-mcp"
     if _IS_WIN32:
@@ -789,6 +793,12 @@ def main():
         sys.exit(0)
 
     cmd = args[0]
+
+    # `wboxr init --help` and the like: the subcommands' options are listed
+    # in the same text (#12)
+    if any(a in ("-h", "--help") for a in args[1:]):
+        print(__doc__.strip())
+        sys.exit(0)
 
     if cmd in ("-V", "--version"):
         from wbox import __version__

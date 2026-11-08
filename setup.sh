@@ -63,12 +63,10 @@ echo "=== wbox-mcp setup ==="
 
 # ── Check setup dependencies ───────────────────────────────────────
 
-for cmd in python3 uv; do
-    if ! command -v "$cmd" &>/dev/null; then
-        echo "Error: '$cmd' is required but not found." >&2
-        exit 1
-    fi
-done
+if ! command -v python3 &>/dev/null; then
+    echo "Error: 'python3' is required but not found." >&2
+    exit 1
+fi
 
 # ── Detect package manager ─────────────────────────────────────────
 
@@ -79,6 +77,30 @@ elif command -v apt-get &>/dev/null; then
     PKG_MGR="apt"
 elif command -v pacman &>/dev/null; then
     PKG_MGR="pacman"
+fi
+
+# uv builds wbox's venv. Fedora and Arch package it; Debian/Ubuntu do not,
+# so there it comes from pipx when present, else the error names the ways.
+if ! command -v uv &>/dev/null; then
+    uv_hint="install it: https://docs.astral.sh/uv/getting-started/installation/ (or 'pipx install uv')"
+    if ! $INSTALL_DEPS; then
+        echo "Error: 'uv' is required but not found — $uv_hint" >&2
+        exit 1
+    fi
+    case "$PKG_MGR" in
+        dnf)    echo "Installing uv"; sudo dnf install -y uv ;;
+        pacman) echo "Installing uv"; sudo pacman -S --noconfirm uv ;;
+        *)
+            if command -v pipx &>/dev/null; then
+                echo "Installing uv with pipx"; pipx install uv
+                export PATH="$HOME/.local/bin:$PATH"
+            fi
+            ;;
+    esac
+    if ! command -v uv &>/dev/null; then
+        echo "Error: 'uv' is required but not found — $uv_hint" >&2
+        exit 1
+    fi
 fi
 
 # Binary -> package name mapping per distro
