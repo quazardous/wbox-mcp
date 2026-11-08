@@ -16,10 +16,15 @@ name: my-wbox
 #             Only supports x11 input backend (no wlroots protocols).
 #   cage    — Kiosk compositor. Fixed-size fullscreen, no resize/move.
 #             Supports hybrid/wayland input backends (wlroots-based).
+#   mutter  — GNOME's compositor, headless only (needs headless: true and
+#             pip install 'wbox-mcp[mutter]'). Input over its RemoteDesktop,
+#             frames over its ScreenCast; Wayland apps only (no X11).
+#             input_backend, renderer and window listing do not apply.
 #
 compositor: labwc
 # compositor: weston
 # compositor: cage
+# compositor: mutter
 
 # Screen size (WxH) — initial size of the nested compositor window.
 screen: "1280x800"

@@ -65,6 +65,9 @@ def _render_options(cfg: dict, backend: str, headless: bool) -> tuple[str, str]:
         raise ValueError(
             f"render_device must be an absolute node path such as "
             f"/dev/dri/renderD128, got {device!r}")
+    if backend == "mutter" and (renderer or device):
+        raise ValueError("renderer and render_device are not supported on "
+                         "mutter, which picks its own renderer")
     if backend == "win32" and (renderer or device):
         raise ValueError("renderer and render_device apply to the Linux "
                          "compositors only, not to win32")
@@ -159,6 +162,21 @@ def build_compositor(cfg: dict) -> CompositorServer:
             headless=headless,
             renderer=renderer,
             render_device=render_device,
+            audio=audio,
+        )
+    elif backend == "mutter":
+        if not headless:
+            # mutter --nested is not wired: running it on the desktop while
+            # the config asks for a visible session would be the wrong one.
+            raise ValueError("compositor: mutter runs headless only; set "
+                             "headless: true")
+        from .compositor.mutter import MutterCompositor
+        return MutterCompositor(
+            screen=screen,
+            instance_name=instance_name,
+            timeouts=timeouts,
+            keyboard_layout=keyboard_layout,
+            headless=True,
             audio=audio,
         )
     elif backend == "labwc":
@@ -465,7 +483,8 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
     if sys.platform != "win32":
         from .compositor.cage import CageCompositor
         from .compositor.labwc import LabwcCompositor
-        if isinstance(compositor, (CageCompositor, LabwcCompositor)):
+        from .compositor.mutter import MutterCompositor
+        if isinstance(compositor, (CageCompositor, LabwcCompositor, MutterCompositor)):
             compositor.set_log_dir(cfg["_log_dir"])
 
     # Setup file logging (rotating, and idempotent across create_server calls)
@@ -549,6 +568,34 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                         },
                     },
                     "required": ["x", "y"],
+                },
+            ),
+            Tool(
+                name="screen_changed",
+                description=(
+                    "Whether the display (or a region) differs from an "
+                    "earlier screenshot taken with the same region. Asserts "
+                    "on pixels that a window moved or a view changed — a "
+                    "hover check can pass with nothing moved. With timeout, "
+                    "keeps looking until it changes or the time is up."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "since": {
+                            "type": "string",
+                            "description": "Path of the earlier screenshot",
+                        },
+                        "region": {
+                            "type": "string",
+                            "description": "The region 'x,y WxH' that screenshot used",
+                        },
+                        "timeout": {
+                            "type": "number",
+                            "description": "Seconds to keep looking for a change (default 0: look once)",
+                        },
+                    },
+                    "required": ["since"],
                 },
             ),
             Tool(
@@ -1015,6 +1062,12 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 ImageContent(type="image", data=img_data, mimeType="image/png"),
                 TextContent(type="text", text=result["path"]),
             ]
+
+        if name == "screen_changed":
+            result = await asyncio.to_thread(
+                compositor.screen_changed, arguments["since"],
+                arguments.get("region"), arguments.get("timeout", 0.0))
+            return _reply(result)
 
         if name == "audio":
             result = await asyncio.to_thread(

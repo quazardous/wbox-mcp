@@ -109,6 +109,7 @@ Generated entry (absolute paths, no cwd needed):
 | `stop` | Graceful shutdown (SIGTERM → SIGKILL on Linux) |
 | `kill` | Force kill + cleanup |
 | `screenshot` | Capture display (returns image, includes modal dialogs) |
+| `screen_changed` | Whether the display (or a region) differs from an earlier screenshot — asserts on pixels that a window moved |
 | `click` | Click at (x, y) with optional button (1=left, 2=middle, 3=right) |
 | `type_text` | Type text into focused widget |
 | `key` | Send keyboard shortcut (e.g. `ctrl+s`, `alt+F4`, `super+a`) |
@@ -170,7 +171,7 @@ tools:
 
 ```yaml
 name: my-app
-compositor: labwc          # labwc (default), weston, or cage
+compositor: labwc          # labwc (default), weston, cage, or mutter (headless)
 screen: "1280x800"
 input_backend: hybrid      # hybrid (default), x11, wayland, or per-function dict
 undecorate: true           # remove server-side window decorations (default: true)
@@ -291,6 +292,53 @@ container `/dev/snd` is usually not granted.
 it — it never falls back to your speakers. Linux only: on Windows, `audio`
 must stay `host`. Fixed when the compositor starts, like `headless`.
 
+### GNOME (mutter)
+
+`compositor: mutter` runs GNOME's compositor headless, for what only mutter
+shows (its placement, focus and input behaviour, GNOME-only bugs). It needs
+`headless: true`: a visible nested mutter is not wired.
+
+```yaml
+compositor: mutter
+headless: true
+screen: "1280x800"         # the virtual monitor, fixed for the session
+keyboard_layout: us        # pinned through GSettings (default us)
+audio: null                # as on the other backends; see below
+```
+
+How it works: mutter runs `--headless --wayland --no-x11 --virtual-monitor`
+with its own session bus, runtime directory and GSettings (auto-maximize off,
+so a window keeps the place mutter gives it). Input goes through mutter's
+`RemoteDesktop` D-Bus interface, frames come from its `ScreenCast` stream
+over the session's private PipeWire — the same one that carries `audio`, so
+it runs even with `audio: host` (the app is then simply not pointed at it).
+The app gets the session's bus, not the desktop's.
+
+Built in, because mutter needs them (found while validating a GNOME-only
+bug):
+
+- one pointer motion and one Shift tap before the app starts: mutter creates
+  its virtual pointer and keyboard at their first event, and a client started
+  earlier lost its first click, or its first typed character;
+- before every press, a motion that really moves the pointer, then a short
+  wait: mutter picks the surface under the pointer on a motion, so a press
+  where a window just appeared could reach nothing;
+- the same nudge before each screenshot, so hover state is current.
+
+Differences from the wlroots backends:
+
+- no X11: the app must speak Wayland (GTK, Qt, egui/winit, SDL… do);
+- text is typed as keysyms: mutter finds each character in the keyboard
+  layout, Shift included; a character the layout lacks is dropped by mutter
+  without an error;
+- `list_windows`, `focus_window` and `resize` answer with an error — bare
+  mutter has no window list, and the virtual monitor is sized at launch;
+- the cursor is not drawn in screenshots; `scale` takes 1/2, 1/3… only.
+
+Needs `mutter`, `dbus-daemon`, GStreamer with `pipewiresrc`
+(`gst-launch-1.0`, videoconvert), PipeWire and WirePlumber, and `jeepney` in
+wbox's environment: `pip install 'wbox-mcp[mutter]'`.
+
 ### Windows (Win32 backend)
 
 Several Linux keys (`headless`, `screen`, `input_backend`, …) are accepted but ignored here — [windows.md](windows.md#keys-that-do-nothing-on-windows) has the list.
@@ -333,6 +381,8 @@ System dependencies are installed automatically by `setup.sh`.
 **Required:** `labwc`, `grim`, `xdotool`, `setxkbmap`, `wlr-randr`, `wlrctl`, `python3`, `uv`, `git`
 
 **For `audio: null` / `capture`** (the headless default): `pipewire`, `wireplumber`, `pipewire-pulse`, `pipewire-alsa`
+
+**For `compositor: mutter`:** `mutter`, `dbus-daemon`, GStreamer with `pipewiresrc`, `pipewire`, `wireplumber`, and the `mutter` extra (`jeepney`) — Fedora: `mutter dbus-daemon gstreamer1 gstreamer1-plugins-base pipewire-gstreamer`; Ubuntu: `mutter gstreamer1.0-pipewire gstreamer1.0-tools gstreamer1.0-plugins-base dbus`
 
 **Optional:** `weston`, `cage`, `weston-screenshooter`, `xclip`/`xsel`, `wl-clipboard`, `ydotool`, `wtype`
 

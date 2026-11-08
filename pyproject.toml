@@ -16,6 +16,8 @@ dependencies = [
 # CI, so `pip install -e ".[test]"` is the one documented way to get a working
 # test environment — contributor or runner alike.
 test = ["pytest>=8"]
+# The mutter backend talks to mutter over D-Bus (pure Python, no libdbus).
+mutter = ["jeepney>=0.8"]
 
 [project.scripts]
 wboxr = "wbox.cli.registry:main"

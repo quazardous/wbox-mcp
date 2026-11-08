@@ -62,7 +62,17 @@ jobs:
             pipewire-alsa \
             wireplumber \
             pulseaudio-utils \
-            alsa-utils
+            alsa-utils \
+            mutter \
+            dbus \
+            gstreamer1.0-tools \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-pipewire \
+            python3-gi \
+            gir1.2-gtk-4.0
+        # The mutter rows since #4851: TestMutter runs mutter headless and
+        # drives a GTK 4 app (gtk_dummy, system python3 + PyGObject); jeepney
+        # comes with the [mutter] extra below.
         # The audio tools since #4702: headless sessions start their own
         # audio server (audio: null), and TestAudio plays through Pulse and
         # ALSA to prove the sound stays inside. A runner without them must
@@ -78,7 +88,7 @@ jobs:
         #   weston, cage — not needed while this job runs labwc only.
 
       - name: Install wbox
-        run: pip install -e ".[test]"
+        run: pip install -e ".[test,mutter]"
 
 
       - name: Report the toolchain
@@ -91,6 +101,8 @@ jobs:
             printf '%-12s %s\n' "$t" "$(command -v $t || echo MISSING)"
           done
           python3 -c "import tkinter; print('tkinter', tkinter.TkVersion)"
+          mutter --version || true
+          gst-inspect-1.0 pipewiresrc | head -3 || true
           python -m pytest --version
 
       - name: Integration suite — labwc + hybrid

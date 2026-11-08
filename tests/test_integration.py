@@ -290,6 +290,9 @@ def _require_backend(compositor: str, backend: str) -> None:
     incomplete and reports green for tests it never ran. That is how a suite
     comes to mean less than it looks like it means.
     """
+    if compositor == "mutter":
+        _require_mutter()
+        return
     if not _compositor_available(compositor):
         pytest.fail(
             f"{compositor} is not installed — this suite tests the Linux "
@@ -300,6 +303,25 @@ def _require_backend(compositor: str, backend: str) -> None:
             f"the tools for the {backend} input backend are missing — "
             f"install them, or deselect the combo with -k"
         )
+
+
+def _require_mutter() -> None:
+    """What the mutter backend and its GTK test app need — a failure if not."""
+    from wbox.compositor.mutter import BINARIES
+    missing = [b for b in BINARIES if not shutil.which(b)]
+    try:
+        import jeepney  # noqa: F401
+    except ImportError:
+        missing.append("jeepney (pip install -e '.[mutter]')")
+    if shutil.which("gst-inspect-1.0") and subprocess.run(
+            ["gst-inspect-1.0", "pipewiresrc"], capture_output=True).returncode:
+        missing.append("GStreamer pipewiresrc")
+    if subprocess.run(["/usr/bin/python3", "-c",
+                       "import gi; gi.require_version('Gtk', '4.0')"],
+                      capture_output=True).returncode:
+        missing.append("GTK 4 for /usr/bin/python3 (python3-gi, gir1.2-gtk-4.0)")
+    if missing:
+        pytest.fail("the mutter backend needs " + ", ".join(missing))
 
 
 def combo_id(val):
@@ -767,7 +789,8 @@ class TestAudio:
     say it did not would prove nothing.
     """
 
-    COMBOS = [("labwc", "hybrid"), ("cage", "hybrid"), ("weston", "x11")]
+    COMBOS = [("labwc", "hybrid"), ("cage", "hybrid"), ("weston", "x11"),
+              ("mutter", "hybrid")]
 
     @staticmethod
     def _require_audio_tools():
@@ -1477,3 +1500,220 @@ class TestPopup:
         assert close_lines, "popup_closed not found in log"
 
 
+
+
+class TestMutter:
+    """#4851 — a headless mutter session, driven over RemoteDesktop/ScreenCast.
+
+    The app is gtk_dummy (GTK 4, native Wayland): mutter runs without X11,
+    so the Tk crash_dummy cannot be shown there. Tests run in file order on
+    one session; the first one must be the first click it ever gets.
+    """
+
+    SIZE = "800x600"
+    CENTER = (400, 300)
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def session(cls):
+        from wbox.server import build_compositor
+        _require_mutter()
+        log_dir = CRASH_DUMMY_DIR / "log"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        app_log = log_dir / "test-mutter.log"
+        fifo = log_dir / "test-mutter.fifo"
+        app_log.unlink(missing_ok=True)
+        comp = build_compositor({
+            "name": "test-mutter", "compositor": "mutter", "screen": cls.SIZE,
+            "headless": True, "keyboard_layout": "us",
+            "timeouts": {"wayland_display": 15, "app_render": 2, "stop": 5},
+        })
+        comp.set_log_dir(log_dir)
+        comp.state.screenshot_dir = CRASH_DUMMY_DIR / "screenshots" / "mutter"
+        r = comp.launch(["/usr/bin/python3", str(CRASH_DUMMY_DIR / "gtk_dummy.py")],
+                        {"GTK_DUMMY_LOG": str(app_log), "GTK_DUMMY_FIFO": str(fifo),
+                         "GTK_DUMMY_SIZE": cls.SIZE})
+        if "error" in r:
+            comp.kill()
+            pytest.fail(f"mutter launch failed: {r['error']}")
+
+        class S:
+            pass
+        s = S()
+        s.comp, s.log, s.fifo = comp, app_log, fifo
+        s.lines = lambda: app_log.read_text().splitlines() if app_log.exists() else []
+        deadline = time.monotonic() + 10
+        while "ready" not in s.lines() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert "ready" in s.lines(), "gtk_dummy never logged ready"
+
+        def cmd(text):
+            fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+            try:
+                os.write(fd, (text + "\n").encode())
+            finally:
+                os.close(fd)
+        s.cmd = cmd
+
+        def after(n, prefix, timeout=3.0):
+            """Lines starting with prefix logged after line n, waiting for one."""
+            deadline = time.monotonic() + timeout
+            while True:
+                found = [l for l in s.lines()[n:] if l.startswith(prefix)]
+                if found or time.monotonic() > deadline:
+                    return found
+                time.sleep(0.05)
+        s.after = after
+        yield s
+        comp.kill(aggressive=True)
+
+    def test_first_click_lands(self, session):
+        """Pitfall 1: before the first motion the seat had no pointer, and
+        the first press went to no surface."""
+        n = len(session.lines())
+        assert session.comp.click(*self.CENTER) == {"ok": True}
+        assert session.after(n, "press main button=1"), session.lines()[n:]
+
+    def test_click_where_a_window_just_appeared(self, session):
+        """Pitfall 2: the pointer stays still, a window maps under it, and a
+        press there must reach that window."""
+        session.comp.mouse_move(*self.CENTER)
+        n = len(session.lines())
+        session.cmd("open_second")
+        assert session.after(n, "second mapped"), "the second window never mapped"
+        time.sleep(0.3)
+        n = len(session.lines())
+        session.comp.click(*self.CENTER)
+        presses = session.after(n, "press ")
+        session.cmd("close_second")
+        time.sleep(0.5)
+        assert presses and presses[0].startswith("press second"), presses
+
+    def test_screen_changed_negative_then_positive(self, session):
+        """The negative is the control: a still screen must not read as moved.
+
+        A region below the entry: its blinking caret changes the full screen
+        every half second, which is a change, but not the one asked about.
+        """
+        comp = session.comp
+        region = "100,100 600x400"
+        before = comp.screenshot("changed_before", region=region)
+        assert "error" not in before, before
+        still = comp.screen_changed(before["path"], region=region)
+        assert still["changed"] is False, still
+        n = len(session.lines())
+        session.cmd("open_second")
+        assert session.after(n, "second mapped")
+        moved = comp.screen_changed(before["path"], region=region, timeout=2)
+        session.cmd("close_second")
+        time.sleep(0.5)
+        assert moved["changed"] is True, moved
+
+    def test_type_text_and_shortcut(self, session):
+        comp = session.comp
+        session.cmd("focus_entry")
+        time.sleep(0.3)
+        comp.key("ctrl+a")
+        comp.key("BackSpace")
+        n = len(session.lines())
+        assert comp.type_text("Hello, World!")["ok"]
+        texts = session.after(n, "text Hello, World!")
+        assert texts, session.lines()[n:]
+        n = len(session.lines())
+        comp.key("ctrl+a")
+        assert session.after(n, "key a mods=ctrl"), session.lines()[n:]
+        comp.type_text("x")
+        assert session.after(n, "text x"), session.lines()[n:]
+
+    def test_scroll(self, session):
+        n = len(session.lines())
+        session.comp.scroll(400, 400, 2)
+        lines = session.after(n, "scroll ")
+        assert lines and all("dy=1" in l for l in lines), lines
+
+    def test_drag(self, session):
+        n = len(session.lines())
+        session.comp.drag(200, 400, 500, 450)
+        drags = session.after(n, "drag dx=")
+        assert drags == ["drag dx=300 dy=50"], drags
+
+    def test_double_click(self, session):
+        n = len(session.lines())
+        session.comp.double_click(*self.CENTER)
+        time.sleep(0.3)
+        presses = [l for l in session.lines()[n:] if l.startswith("press main")]
+        assert len(presses) == 2, presses
+
+    def test_hold_ctrl_click(self, session):
+        n = len(session.lines())
+        r = session.comp.hold(["ctrl"], [{"type": "key", "key": "a"}])
+        assert r.get("ok"), r
+        assert session.after(n, "key a mods=ctrl"), session.lines()[n:]
+
+    def test_screenshot_region_and_scale(self, session):
+        import struct
+        r = session.comp.screenshot("half", scale=0.5, region="0,0 400x300")
+        assert "error" not in r, r
+        data = Path(r["path"]).read_bytes()
+        assert data[:8] == b"\x89PNG\r\n\x1a\n"
+        assert struct.unpack(">II", data[16:24]) == (200, 150)
+        # the drawing area's blue, at the full screen's centre
+        r = session.comp.screenshot("full")
+        assert struct.unpack(">II", Path(r["path"]).read_bytes()[16:24]) == (800, 600)
+        assert "error" in session.comp.screenshot(region="700,500 200x200")
+
+    def test_record(self, session):
+        r = session.comp.record(1.0, region="0,0 200x200")
+        assert "error" not in r, r
+        assert r["frames"] >= 3, r  # at least the keepalive's 5 a second
+
+    def test_what_bare_mutter_cannot_do_says_so(self, session):
+        for r in (session.comp.list_windows(), session.comp.focus_window("x"),
+                  session.comp.resize(640, 480)):
+            assert "error" in r and "mutter" in r["error"], r
+        assert session.comp.get_size() == {"width": 800, "height": 600}
+
+    def test_app_runs_on_the_private_bus_and_audio(self, session):
+        env = dict(kv.split("=", 1) for kv in Path(
+            f"/proc/{session.comp.state.app_pid}/environ").read_text().split("\0") if "=" in kv)
+        assert env["DBUS_SESSION_BUS_ADDRESS"] == session.comp._bus_address
+        assert "DISPLAY" not in env
+        # headless default: audio null, the app on the session's own server
+        assert env["PULSE_SERVER"].startswith(f"unix:{session.comp._audio.dir}")
+
+    def test_config_validation(self):
+        from wbox.server import build_compositor
+        with pytest.raises(ValueError, match="headless only"):
+            build_compositor({"compositor": "mutter", "headless": False})
+        with pytest.raises(ValueError, match="not supported on mutter"):
+            build_compositor({"compositor": "mutter", "headless": True,
+                              "renderer": "gles2"})
+
+    def test_missing_mutter_fails_the_launch(self, monkeypatch):
+        from wbox.server import build_compositor
+        comp = build_compositor({"compositor": "mutter", "headless": True,
+                                 "name": "test-mutter-missing"})
+        real_which = shutil.which
+        monkeypatch.setattr("shutil.which", lambda name, *a, **k:
+                            None if name == "mutter" else real_which(name, *a, **k))
+        r = comp.launch(["true"], {})
+        assert "error" in r and "mutter" in r["error"], r
+        assert not comp.is_running()
+
+
+class TestScreenChanged:
+    """#4851 — screen_changed on a wlroots backend too: it is generic."""
+
+    def test_on_a_wlroots_backend(self, tmp_path):
+        _require_backend("labwc", "hybrid")
+        h = WboxTestHarness("labwc", "hybrid", "normal", tag="changed")
+        try:
+            r = h.launch()
+            assert "error" not in r, r
+            h.comp.state.screenshot_dir = tmp_path
+            before = h.comp.screenshot("before")
+            assert h.comp.screen_changed(before["path"])["changed"] is False
+            assert h.send_cmd("set_text screen changed")
+            assert h.comp.screen_changed(before["path"], timeout=3)["changed"] is True
+        finally:
+            h.kill()

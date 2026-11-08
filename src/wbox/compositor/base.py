@@ -731,6 +731,33 @@ class CompositorServer:
             return {"error": f"grim failed: {result.stderr.strip()}"}
         return {"path": str(out_path), "size": out_path.stat().st_size}
 
+    def screen_changed(self, since: str, region: str | None = None,
+                       timeout: float = 0.0) -> dict:
+        """Whether the display differs from an earlier screenshot (#4851).
+
+        `since` is a screenshot taken with the same `region`. A new one is
+        taken (again until `timeout`, if given, so an animation can finish)
+        and their bytes compared: one encoder and identical pixels give
+        identical files. It asserts on pixels that a window moved or a view
+        changed, where a check on hover could pass with nothing moved.
+        """
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        ref = Path(since)
+        try:
+            before = ref.read_bytes()
+        except OSError as exc:
+            return {"error": f"cannot read {since}: {exc}"}
+        deadline = time.monotonic() + max(0.0, timeout or 0.0)
+        while True:
+            shot = self.screenshot(f"{ref.stem}_now.png", None, region)
+            if "error" in shot:
+                return shot
+            changed = Path(shot["path"]).read_bytes() != before
+            if changed or time.monotonic() >= deadline:
+                return {"changed": changed, "since": str(ref), "path": shot["path"]}
+            time.sleep(0.1)
+
     # ── Recording (#3228) ──────────────────────────────────────────
 
     def record(self, seconds: float, region: str | None = None,

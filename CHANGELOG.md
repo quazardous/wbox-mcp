@@ -7,6 +7,23 @@
   Format: https://semver.org
 -->
 
+## [Unreleased]
+
+### Added
+
+- **`compositor: mutter` — GNOME's compositor, headless** (#4851). For bugs
+  only GNOME shows: wbox now runs mutter itself, without X11, and drives it
+  through mutter's own remote desktop and screen cast interfaces — the same
+  tools as on labwc (click, drag, scroll, keys, text, screenshots, record).
+  It handles mutter's quirks so tests don't have to: the first click and
+  the first typed character no longer get lost, and a click where a window
+  has just appeared reaches it. Needs `headless: true` and
+  `pip install 'wbox-mcp[mutter]'`; the app must speak Wayland.
+- **`screen_changed`**, on every backend: whether the display, or a region of
+  it, differs from an earlier screenshot — optionally waiting for it to. It
+  checks on pixels that a window really moved, where a hover check could
+  pass with nothing moved.
+
 ## [0.13.0] - 2026-11-03
 
 ### Added
