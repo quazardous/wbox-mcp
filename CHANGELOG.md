@@ -7,6 +7,25 @@
   Format: https://semver.org
 -->
 
+## [Unreleased]
+
+### Changed
+
+- **The clipboard bridge is now opt-in** (GitHub #10). On labwc it was on
+  unless a config said otherwise, so an app in a box read everything copied
+  on the desktop — what the README promised it would not do unless you let
+  it. Set `clipboard_bridge: true` to get it back.
+
+### Fixed
+
+- **`wboxr init --register` writes an absolute path** to `wbox-mcp` in
+  `.mcp.json` (GitHub #11), so an MCP client started with another `PATH`
+  (a desktop app without `~/.local/bin`) can still start the server.
+- **`wboxr init --help`** (and `--help` after any subcommand) prints the
+  options instead of failing (GitHub #12).
+- **`setup.sh` installs `uv`** when it is missing, on Fedora and Arch, or
+  with pipx; otherwise it says how to install it (GitHub #13).
+
 ## [0.13.0] - 2026-11-03
 
 ### Added

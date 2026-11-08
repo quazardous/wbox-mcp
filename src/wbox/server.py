@@ -121,7 +121,7 @@ def build_compositor(cfg: dict) -> CompositorServer:
     keyboard_layout = cfg.get("keyboard_layout", "")
     # "quiet" is accepted as an alias — it is how the feature was requested
     headless = bool(cfg.get("headless", cfg.get("quiet", False)))
-    clipboard_bridge = bool(cfg.get("clipboard_bridge", True))
+    clipboard_bridge = bool(cfg.get("clipboard_bridge", False))
     renderer, render_device = _render_options(cfg, backend, headless)
     audio = _audio_mode(cfg, backend, headless)
 

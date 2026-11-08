@@ -178,10 +178,10 @@ headless: false            # run offscreen — no window on the host desktop.
                            # Screenshots, clicks and keys all keep working.
                            # Supported by all three compositors (weston uses
                            # the pixman software renderer). Alias: quiet
-clipboard_bridge: true     # labwc only — sync the clipboard both ways between
-                           # the sandbox and your desktop. Convenient, but it
-                           # means the sandboxed app reads everything you copy;
-                           # set false to keep the sandbox clipboard isolated
+clipboard_bridge: false    # labwc only, opt-in — sync the clipboard both ways
+                           # between the sandbox and your desktop. Convenient,
+                           # but the sandboxed app then reads everything you
+                           # copy and can write to your clipboard
 keyboard_layout: ""        # XKB layout forced on the nested seat AND its
                            # Xwayland (all compositors). Empty = inherit from
                            # host. Set "us" for reliable input injection: the
