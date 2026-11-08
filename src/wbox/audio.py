@@ -76,6 +76,16 @@ wireplumber.profiles = {
 """
 
 
+def _pw_record_has_raw() -> bool:
+    """pw-record --raw exists from PipeWire 1.2; 1.0 (Ubuntu 24.04) lacks it."""
+    try:
+        out = subprocess.run(["pw-record", "--help"], capture_output=True,
+                             text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+    return "--raw" in out.stdout + out.stderr
+
+
 def _wireplumber_has_profiles() -> bool:
     """WirePlumber 0.5 takes `-p <profile>`; 0.4 (Ubuntu 24.04) does not."""
     import re
@@ -114,6 +124,13 @@ class AudioSandbox:
         missing = [d for d in DAEMONS if not shutil.which(d)]
         if self.mode == "capture" and not shutil.which("pw-record"):
             missing.append("pw-record")
+        # WirePlumber 0.4 has no profile to run without a session bus: with
+        # none it exits at once ("Cannot autolaunch D-Bus without X11
+        # $DISPLAY"), nothing links the streams, and the session is silent
+        # AND, under mutter, without a single frame. It gets a private one.
+        wp04 = shutil.which("wireplumber") and not _wireplumber_has_profiles()
+        if wp04 and not shutil.which("dbus-daemon"):
+            missing.append("dbus-daemon (for WirePlumber 0.4)")
         if missing:
             raise RuntimeError(
                 f"audio: {self.mode} needs {', '.join(missing)} (PipeWire), "
@@ -132,18 +149,28 @@ class AudioSandbox:
             f = cfg / "wireplumber" / rel
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text(text)
-        wp_cmd = ["wireplumber", "-p", "wbox"] if _wireplumber_has_profiles() \
-            else ["wireplumber"]
+        wp_cmd = ["wireplumber"] if wp04 else ["wireplumber", "-p", "wbox"]
 
         # The daemons read their configuration from this XDG_CONFIG_HOME
         # only, so the user's own PipeWire tweaks never reach them.
         env = self._daemon_env()
         try:
+            if wp04:
+                bus = self.dir / "audio-bus"
+                self._spawn(["dbus-daemon", "--session", "--nofork", "--nopidfile",
+                             f"--address=unix:path={bus}"], env)
+                self._wait_socket(bus, "dbus-daemon")
+                env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
             self._spawn(["pipewire"], env)
             self._wait_socket(self.dir / "pipewire-0", "pipewire")
-            self._spawn(wp_cmd, env)
+            wp = self._spawn(wp_cmd, env)
             self._spawn(["pipewire-pulse"], env)
             self._wait_socket(self.dir / "pulse" / "native", "pipewire-pulse")
+            # Without WirePlumber nothing is linked: no sound, no screen
+            # cast frame, and no error from anything else. Say it here.
+            time.sleep(0.2)
+            if wp.poll() is not None:
+                raise RuntimeError(self._died("wireplumber", wp.returncode))
             if self.mode == "capture":
                 self._start_capture(env)
         except Exception:
@@ -172,6 +199,13 @@ class AudioSandbox:
         self._procs.append(proc)
         return proc
 
+    def _died(self, who: str, code: int) -> str:
+        tail = ""
+        log_path = self.dir / f"{who}.log"
+        if log_path.exists():
+            tail = "\n".join(log_path.read_text(errors="replace").splitlines()[-5:])
+        return f"audio: {who} exited ({code}) at start" + (f":\n{tail}" if tail else "")
+
     def _wait_socket(self, path: Path, who: str, timeout: float = 5) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -195,20 +229,45 @@ class AudioSandbox:
         self.capture_path = self.capture_dir / f"audio-{stamp}.wav"
         self._raw = self.capture_path.with_suffix(".raw")
         raw = open(self._raw, "wb")
+        err = open(self.dir / "pw-record.log", "w")
+        # Raw on stdout rather than pw-record's WAV, whose header is only
+        # right once it closes: stats() reads the capture while it grows.
+        # From PipeWire 1.2 that takes --raw (without it, stdout gets a Sun
+        # .au stream, which reads as loud noise); 1.0 (Ubuntu 24.04) has no
+        # --raw, exits on it, and already writes raw samples to stdout.
+        raw_flag = ["--raw"] if _pw_record_has_raw() else []
         try:
-            # Raw on stdout rather than pw-record's WAV, whose header is only
-            # right once it closes: stats() reads the capture while it grows.
-            # --raw matters: without it, stdout gets a Sun .au stream (a
-            # header, then big-endian samples), which reads as loud noise.
             self._recorder = subprocess.Popen(
-                ["pw-record", "--raw", "--target", SINK,
+                ["pw-record", *raw_flag, "--target", SINK,
                  "-P", "{ stream.capture.sink = true }",
                  "--format", "s16", "--rate", str(RATE),
                  "--channels", str(CHANNELS), "-"],
-                env=env, stdin=subprocess.DEVNULL, stdout=raw,
-                stderr=subprocess.DEVNULL)
+                env=env, stdin=subprocess.DEVNULL, stdout=raw, stderr=err)
         finally:
             raw.close()
+            err.close()
+        # A recorder that dies at once leaves a capture of 0 s, which reads
+        # as "the app made no sound". Say why instead.
+        time.sleep(0.2)
+        if self._recorder.poll() is not None:
+            code = self._recorder.returncode
+            self._recorder = None
+            raise RuntimeError(self._died("pw-record", code))
+
+    def _pcm(self) -> bytes:
+        """The capture so far as little-endian s16: raw as recorded, or, if
+        a pw-record ever wrote a Sun .au stream, its header skipped and its
+        big-endian samples swapped."""
+        if not self._raw or not self._raw.exists():
+            return b""
+        data = self._raw.read_bytes()
+        if data[:4] != b".snd" or len(data) < 8:
+            return data
+        data = data[int.from_bytes(data[4:8], "big"):]
+        data = data[:len(data) - len(data) % WIDTH]
+        samples = array("h", data)
+        samples.byteswap()
+        return samples.tobytes()
 
     def apply(self, env: dict[str, str]) -> None:
         """Point an app environment at this server, and only at it."""
@@ -225,7 +284,7 @@ class AudioSandbox:
             return {"error": f"audio is {self.mode}: nothing is captured "
                              "(set audio: capture)"}
         if self._raw is not None:
-            data = self._raw.read_bytes() if self._raw.exists() else b""
+            data = self._pcm()
         else:  # the session has stopped: the capture is a WAV now
             with wave.open(str(self.capture_path)) as w:
                 data = w.readframes(w.getnframes())
@@ -272,7 +331,7 @@ class AudioSandbox:
         """Wrap the raw capture in a WAV, the file the session leaves behind."""
         if not self._raw or not self._raw.exists():
             return
-        data = self._raw.read_bytes()
+        data = self._pcm()
         frame = CHANNELS * WIDTH
         with wave.open(str(self.capture_path), "wb") as w:
             w.setnchannels(CHANNELS)
