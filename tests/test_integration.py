@@ -317,9 +317,17 @@ def _require_mutter() -> None:
             ["gst-inspect-1.0", "pipewiresrc"], capture_output=True).returncode:
         missing.append("GStreamer pipewiresrc")
     if subprocess.run(["/usr/bin/python3", "-c",
-                       "import gi; gi.require_version('Gtk', '4.0')"],
+                       "import gi; gi.require_version('Gtk', '4.0'); "
+                       "from gi.repository import Gtk"],
                       capture_output=True).returncode:
         missing.append("GTK 4 for /usr/bin/python3 (python3-gi, gir1.2-gtk-4.0)")
+    # Without the cairo converter gtk_dummy's windows map and take clicks
+    # but draw nothing: every pixel check then compares blank with blank
+    # (a CI run on Ubuntu failed that way, with no error anywhere).
+    if subprocess.run(["/usr/bin/python3", "-c",
+                       "import gi; gi.require_foreign('cairo')"],
+                      capture_output=True).returncode:
+        missing.append("cairo for PyGObject (python3-gi-cairo; python3-gobject on Fedora)")
     if missing:
         pytest.fail("the mutter backend needs " + ", ".join(missing))
 
@@ -1697,6 +1705,22 @@ class TestMutter:
         with pytest.raises(ValueError, match="not supported on mutter"):
             build_compositor({"compositor": "mutter", "headless": True,
                               "renderer": "gles2"})
+
+    def test_a_log_dir_that_does_not_exist_yet(self, tmp_path):
+        """It is made, as on the other backends: mutter's log was opened
+        before its directory existed, and the launch failed."""
+        from wbox.server import build_compositor
+        _require_mutter()
+        comp = build_compositor({"compositor": "mutter", "headless": True,
+                                 "name": "test-mutter-logdir",
+                                 "timeouts": {"app_render": 0}})
+        comp.set_log_dir(tmp_path / "not" / "yet")
+        try:
+            r = comp.launch(["sleep", "30"], {})
+            assert "error" not in r, r
+            assert (tmp_path / "not" / "yet" / "mutter-compositor.log").exists()
+        finally:
+            comp.kill(aggressive=True)
 
     def test_missing_mutter_fails_the_launch(self, monkeypatch):
         from wbox.server import build_compositor

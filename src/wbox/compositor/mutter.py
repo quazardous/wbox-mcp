@@ -310,10 +310,10 @@ class MutterCompositor(CompositorServer):
         self._bus_address = env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
         self._env = env
 
+        if self._log_file:  # made first: a log dir that does not exist yet is not an error
+            self._log_file.parent.mkdir(parents=True, exist_ok=True)
         log_target = (open(self._log_file, "wb") if self._log_file
                       else subprocess.DEVNULL)
-        if self._log_file:
-            self._log_file.parent.mkdir(parents=True, exist_ok=True)
         try:
             self.state.compositor_proc = subprocess.Popen(
                 ["mutter", "--headless", "--wayland", "--no-x11",

@@ -40,6 +40,15 @@
   options instead of failing (GitHub #12).
 - **`setup.sh` installs `uv`** when it is missing, on Fedora and Arch, or
   with pipx; otherwise it says how to install it (GitHub #13).
+- **`audio: null` and `capture` on Ubuntu 24.04** (WirePlumber 0.4,
+  PipeWire 1.0), outside a desktop session — a container, a bench box:
+  WirePlumber 0.4 exited at once for want of a session bus, so nothing was
+  linked and the session was silent without saying so; it now gets a private
+  bus (`dbus-daemon` needed there). And PipeWire 1.0's `pw-record` has no
+  `--raw` and exited on it, so `capture` recorded nothing; wbox passes it
+  only where it exists.
+- **A dead audio daemon fails the launch** with its log, where WirePlumber or
+  the recorder could die at start and leave a session that looked fine.
 
 ## [0.13.0] - 2026-11-03
 
