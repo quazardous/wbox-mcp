@@ -1,25 +1,65 @@
-# wbox-mcp
+# wbox
 
-**Run any desktop app in an isolated box that Claude can see and control — without touching your desktop.**
+**Run a desktop app in a box of its own — offscreen, isolated from your desktop — and drive it: click, type, screenshot, film, even listen.**
 
-Most computer-use servers automate *your* screen: they move your real mouse, steal your focus, and see whatever you have open. wbox gives the app its own nested compositor instead. Claude clicks and types inside that box, screenshots it pixel-perfect, and your desktop never knows it happened. You can keep working while it does.
+wbox gives one app its own display server: a nested Wayland compositor on Linux (labwc, cage, weston, or GNOME's mutter), Windows Sandbox on Windows. Input goes to that box's own seat, screenshots come from its own output, and with `headless: true` nothing is ever drawn on your screen. Your mouse, your focus, your clipboard and your speakers stay yours.
+
+It is made for the jobs a desktop gets in the way of:
+
+- **GUI test suites and CI** — launch the app headless, drive it, assert on pixels, keep the screenshots;
+- **reproducing a bug under a given desktop** — the same app under labwc, cage, weston or mutter (GNOME), on a GPU or in software;
+- **screenshot tours and recordings** — frames, gifs, and which frames changed;
+- **AI agents** — an MCP server exposes the same box to Claude or any MCP client.
 
 ![LibreOffice Writer running inside wbox, headless](docs/images/writer-headless.png)
 
-*LibreOffice Writer, launched and typed into by Claude through wbox — captured with `headless: true`, so this window never rendered on anyone's desktop.*
+*LibreOffice Writer, launched and typed into through wbox — captured with `headless: true`, so this window never rendered on anyone's desktop.*
 
-## Why not just use a desktop-takeover server?
+## Why a box, and not desktop automation?
 
-| | wbox | Typical computer-use / desktop MCP |
+| | wbox | Desktop automation (xdotool, computer-use servers) |
 |---|---|---|
-| **Isolated from your desktop** | Yes — nested compositor, own seat | No — shares your screen and input |
+| **Isolated from your desktop** | Yes — its own compositor, its own seat | No — your screen and your input |
 | **Runs in the background** | Yes — keep working while it drives | No — it owns your mouse and focus |
 | **Offscreen / headless** | Yes — `headless: true`, nothing renders | Rarely |
 | **Can the app see your screen?** | No | Yes — everything you have open |
 | **Can it read your clipboard?** | Only if you let it (`clipboard_bridge`) | Yes |
+| **Does its sound reach your speakers?** | Not headless (`audio: null`), or recorded (`capture`) | Yes |
 | **Safe for CI** | Yes | No |
 
-That combination is the whole point. If you only need to automate the machine you're staring at, a simpler server will do.
+## Three ways to drive a box
+
+### From Python — tests, scripts, CI
+
+```python
+import time
+from pathlib import Path
+from wbox.server import build_compositor
+
+box = build_compositor({"compositor": "labwc", "headless": True,
+                        "screen": "1024x700", "keyboard_layout": "us"})
+box.state.screenshot_dir = Path("shots")
+box.launch(["zenity", "--entry", "--text", "Your name?"], {})
+box.type_text("Hello from wbox")
+time.sleep(0.3)                      # let the app draw the last keystroke
+print(box.screenshot("entry"))       # {'path': 'shots/entry.png', ...}
+box.stop()
+```
+
+Every tool below is a method of the box, taking the same arguments and returning the same dict. wbox's own integration suite (`tests/test_integration.py`) drives its boxes this way.
+
+### From an AI agent — MCP
+
+```bash
+cd my-project/
+wboxr init --register      # wbox/config.yaml + an entry in .mcp.json
+```
+
+Then ask: *"Open Writer, type 'Hello World', and show me a screenshot."* The agent calls `launch`, `type_text` and `screenshot` itself. [End to end](#end-to-end-with-mcp) below shows the files this writes.
+
+### On a shared machine — with mcu
+
+GUI tests want a machine that is not your laptop: a GPU, a clean Fedora image, a queue. [**mcu**](https://github.com/quazardous/mcu) turns one Linux box into a shared job box for several projects and agents, each with its SSH key, its rootless containers and its share of threads, memory and GPUs. It pairs naturally with wbox: a job starts a headless wbox session inside its container, drives the app, and leaves the screenshots in the job's output. mcu's guide has [a ready-made wbox recipe](https://github.com/quazardous/mcu/blob/main/docs/USING.md#running-a-gui-app-headless-wbox) (labwc headless, on the iGPU or an NVIDIA card), and wbox's own backends are tested on such a box.
 
 ## Install
 
@@ -52,21 +92,13 @@ ln -s ~/.local/share/wbox-mcp/.venv/bin/{wboxr,wbox-mcp} ~/.local/bin/
 
 Package names differ per distro — `setxkbmap` is `x11-xkb-utils` on Debian/Ubuntu, `setxkbmap` on Fedora, `xorg-setxkbmap` on Arch. The setup script knows the mapping for all three.
 
-## Quick start
+## End to end with MCP
+
+`wboxr init` asks a few questions, adapted to your platform, or takes flags:
 
 ```bash
-cd my-project/
-wboxr init --register
-```
-
-That creates `wbox/config.yaml` and registers the server in `.mcp.json`. The wizard adapts to your platform.
-
-```bash
-# Non-interactive
 wboxr init --name writer --app-command "soffice --writer" --register
 ```
-
-## End to end
 
 `wboxr init --register` writes this into your `.mcp.json`:
 
@@ -76,7 +108,7 @@ wboxr init --name writer --app-command "soffice --writer" --register
     "writer": {
       "type": "stdio",
       "command": "/home/you/.local/bin/wbox-mcp",
-      "args": ["serve", "--mcp-dir", "/home/you/my-project/wbox"]
+      "args": ["serve", "/home/you/my-project/wbox/config.yaml"]
     }
   }
 }
@@ -86,7 +118,7 @@ And `wbox/config.yaml` looks like this — the whole minimal form:
 
 ```yaml
 name: writer
-compositor: labwc          # labwc | weston | cage | win32
+compositor: labwc          # labwc | cage | weston | mutter | win32
 screen: "1280x800"
 input_backend: hybrid      # hybrid | x11 | wayland
 headless: false            # true = runs offscreen, nothing on your desktop
@@ -99,7 +131,7 @@ Then just ask:
 
 > Open Writer, type "Hello World", and show me a screenshot.
 
-Claude calls `launch`, `type_text` and `screenshot` on its own. The window never appears on your desktop if `headless: true`, and never steals your focus either way.
+The agent calls `launch`, `type_text` and `screenshot` on its own. The window never appears on your desktop if `headless: true`, and never steals your focus either way.
 
 Two settings are worth knowing before you automate a real app:
 
@@ -113,7 +145,7 @@ Two settings are worth knowing before you automate a real app:
 | Screenshot | grim (pixel-perfect) | PrintWindow — works behind other windows |
 | Keyboard | wbox-keyboard (virtual keyboard) | SendInput (Unicode) / PostMessage |
 | Mouse | wbox-pointer (virtual pointer) | SendInput / PostMessage |
-| Clipboard | xclip + bridge to host | Win32 clipboard API — yours, shared; the sandbox's own with `sandbox:` |
+| Clipboard | the box's own; a bridge to yours is opt-in | Win32 clipboard API — yours, shared; the sandbox's own with `sandbox:` |
 | Window management | wlrctl (list/focus) | Win32 (list/focus, which one is active) |
 | Resize display | wlr-randr | Resizes the window: its client area, to the pixel |
 | App isolation | Full (nested compositor) | With `sandbox:` (Windows Sandbox); **none** without |
@@ -121,7 +153,7 @@ Two settings are worth knowing before you automate a real app:
 | Offscreen / headless | Yes (`headless: true`) | With `sandbox:`, the sandbox's window minimized; ignored without |
 | Interferes with host | No | Not with `sandbox:`; without, most clicks move your cursor and take focus |
 
-**Linux** — the app runs inside a nested Wayland compositor (labwc, weston or cage). Full isolation: the app cannot see or interfere with your desktop. Clipboard is bridged automatically, and you can switch that bridge off. Keyboard and mouse are injected through Wayland virtual-input protocols, so nothing leaks onto your own seat.
+**Linux** — the app runs inside a nested Wayland compositor (labwc, cage or weston), or in a headless GNOME mutter (`compositor: mutter`, driven through mutter's own remote-desktop and screen-cast interfaces). Full isolation: the app cannot see or interfere with your desktop. Its clipboard is its own unless you turn on `clipboard_bridge`, and headless its sound goes to a private audio server (`audio: null`, or `capture` to record and measure it). Keyboard and mouse are injected through the box's own input devices, so nothing leaks onto your seat.
 
 Set `headless: true` and the nested session runs offscreen — no window on your desktop, while screenshots, clicks and keystrokes keep working exactly the same. Handy for test suites and unattended runs.
 
@@ -129,11 +161,15 @@ Set `headless: true` and the nested session runs offscreen — no window on your
 
 Two things are safer than they used to be. `type_text` types the characters and never touches your clipboard. And when the app window can't be brought to the front, `click`, `mouse_move` and key combos refuse and name the window that is in the way, instead of clicking it. Elevated apps remain largely off-limits. [docs/windows.md](docs/windows.md) has what was measured to work, the limitations, and troubleshooting.
 
-## MCP tools
+## Tools
 
-`launch` · `stop` · `kill` · `screenshot` · `record` · `click` · `dblclick` · `drag` · `scroll` · `hold` · `type_text` · `key` · `keys` · `mouse_move` · `get_mouse_position` · `get_size` · `resize` · `list_windows` · `focus_window` · `clipboard_read` · `clipboard_write` · `tail_log` · `clean` · `debug_input`
+The same set as MCP tools and as methods of a box in Python:
 
-Plus custom script tools via `wboxr tool add`.
+`launch` · `stop` · `kill` · `screenshot` · `screen_changed` · `record` · `audio` · `click` · `dblclick` · `drag` · `scroll` · `hold` · `type_text` · `key` · `keys` · `mouse_move` · `get_mouse_position` · `get_size` · `resize` · `list_windows` · `focus_window` · `clipboard_read` · `clipboard_write` · `tail_log` · `clean` · `debug_input`
+
+Plus custom script tools via `wboxr tool add` (MCP).
+
+`screen_changed` answers whether the display, or a region of it, differs from an earlier screenshot — optionally waiting for it to: an assertion on pixels that a window really moved or a view really changed.
 
 ### Seeing what a screenshot cannot show
 
