@@ -1109,8 +1109,17 @@ class TestWindowState:
         self._state_or_skip(h.comp, h.compositor, h.app_mode)
 
         h.send_cmd("open_popup")
-        time.sleep(1.2)
+        # Wait for the popup to be listed rather than sleeping a fixed time:
+        # under load cage listed it after 1.2 s only some of the time, and
+        # the skip below fired on a slow run (3 extra skips, 2026-11-08).
+        deadline = time.monotonic() + 5
         try:
+            while True:
+                after = h.comp.list_windows()["windows"]
+                if len(after) >= 2 or time.monotonic() > deadline:
+                    break
+                time.sleep(0.2)
+            time.sleep(0.3)  # the activation follows the mapping
             after = h.comp.list_windows()["windows"]
             if len(after) < 2:
                 assert h.compositor == "cage", (
