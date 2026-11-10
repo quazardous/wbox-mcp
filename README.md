@@ -75,6 +75,15 @@ On Windows, read [docs/windows.md](docs/windows.md) first — isolation there co
 
 **What that script does**, so you can decide before running it: it installs the missing system packages through your distro's package manager (`dnf`, `apt` or `pacman`, asking first), clones this repo into `~/.local/share/wbox-mcp`, installs it into a venv there, and symlinks the two commands `wboxr` and `wbox-mcp` into `~/.local/bin`. It touches nothing else and needs `sudo` only for the packages.
 
+**From PyPI**, with the system packages of step 1 below installed first:
+
+```bash
+pipx install "wbox-mcp[scenario]"     # or: pip install "wbox-mcp[scenario]"
+```
+
+`[scenario]` adds numpy and Pillow, which scenarios and capture masks need;
+leave it out for the box alone.
+
 **Manual install**, if you'd rather not pipe a script into a shell:
 
 ```bash
