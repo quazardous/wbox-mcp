@@ -76,6 +76,7 @@ class LabwcCompositor(CompositorServer):
         for tool in ("labwc", "grim", "xdotool"):
             if not shutil.which(tool):
                 raise RuntimeError(f"'{tool}' not found in PATH")
+        self._check_x11_socket_dir()
 
         config_dir = self._write_config()
 

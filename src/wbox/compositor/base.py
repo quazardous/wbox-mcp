@@ -263,6 +263,30 @@ class CompositorServer:
                 return line.split()[0]
         return ""
 
+    @staticmethod
+    def _check_x11_socket_dir() -> None:
+        """Fail early when XWayland cannot use /tmp/.X11-unix.
+
+        XWayland refuses that directory unless root or the current user owns
+        it. A container that shares the host's /tmp — distrobox, toolbox —
+        sees it as another user through the user namespace, and wlroots then
+        logs "not owned by root or us" and the compositor exits during launch
+        with nothing in wbox's own error but "exited with code 1".
+        """
+        d = Path("/tmp/.X11-unix")
+        if not d.exists():
+            return
+        owner = d.stat().st_uid
+        if owner in (0, os.getuid()):
+            return
+        raise RuntimeError(
+            f"/tmp/.X11-unix is owned by uid {owner}, neither root nor you "
+            f"(uid {os.getuid()}): XWayland cannot open its socket there and "
+            "the compositor exits at launch. A shared /tmp inside distrobox or "
+            "toolbox looks like this. Give the container its own, once per "
+            "container: sudo mount -t tmpfs -o mode=1777 tmpfs /tmp/.X11-unix"
+        )
+
     def _apply_screen_size(self) -> None:
         """Set the nested output resolution via wlr-randr (wlroots only).
 

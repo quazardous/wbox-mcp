@@ -49,6 +49,7 @@ class CageCompositor(CompositorServer):
         for tool in ("cage", "grim", "xdotool"):
             if not shutil.which(tool):
                 raise RuntimeError(f"'{tool}' not found in PATH")
+        self._check_x11_socket_dir()
 
         cage_cmd = ["cage", "--"]
         inner: list[str] = []

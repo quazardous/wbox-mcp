@@ -30,6 +30,14 @@
 
 ### Fixed
 
+- **A shared `/tmp` no longer fails as "exited with code 1".** Inside distrobox
+  or toolbox, `/tmp` comes from the host and `/tmp/.X11-unix` belongs to
+  another user through the user namespace. XWayland refuses it, labwc or cage
+  exits during launch, and wbox reported only that the compositor had died —
+  the reason was in the compositor's own log, if a log directory had been set.
+  Both wlroots backends now check the directory first and say what is wrong
+  and how to fix it (a tmpfs over that path, once per container).
+
 - **The first key or pad press after `launch` was lost.** `launch` ends by
   moving the pointer onto the app, which gives it the keyboard focus, and
   returned before the app had taken it: an SDL app dropped the key sent next,
