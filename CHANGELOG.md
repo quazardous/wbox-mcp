@@ -7,6 +7,24 @@
   Format: https://semver.org
 -->
 
+## [Unreleased]
+
+### Fixed
+
+- **`setup.sh` installed nothing on Fedora 41** (and any release that renames a
+  package). The dependency list still asked for `xorg-x11-utils`, which Fedora
+  split up years ago; dnf drops the whole transaction when one name is unknown,
+  so all sixteen dependencies were skipped and setup stopped on "MISSING
+  (required): labwc grim wlrctl" with no hint why. The name is now `xev`, and
+  dnf is called with `--skip-unavailable` so one renamed package can no longer
+  take the rest down with it.
+- **Immutable distributions are no longer a dead end.** Bazzite, Silverblue,
+  Kinoite and SteamOS have dnf, but their base image is read only: installing
+  into it means layering and a reboot. setup.sh now recognises them and prints
+  a ready-to-paste distrobox recipe — create the box, install the packages in
+  it, run setup there — instead of a sudo command that cannot work. This is the
+  common case on the handhelds wbox is most useful on, Steam Deck and ROG Ally.
+
 ## [0.14.0] - 2026-11-08
 
 ### Added
