@@ -9,6 +9,8 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-10
+
 ### Added
 
 - **Scenarios: a run played again, and compared.** A scenario file writes a

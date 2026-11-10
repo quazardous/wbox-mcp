@@ -2,9 +2,24 @@
 name = "wbox-mcp"
 dynamic = ["version"]
 description = "Wayland/X11 box — nested compositor MCP server for GUI automation"
+readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
+authors = [{name = "David Berlioz"}]
+keywords = ["mcp", "gui-automation", "wayland", "labwc", "headless", "testing",
+            "screenshot", "gamepad", "ai-agents"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Desktop Environment :: Window Managers",
+]
 dependencies = [
     "jsonschema>=4.20",
     "mcp>=2.3,<3",
@@ -20,6 +35,12 @@ test = ["pytest>=8"]
 mutter = ["jeepney>=0.8"]
 # Scenarios compare captures pixel by pixel (wbox/imaging.py).
 scenario = ["numpy>=1.24", "pillow>=10"]
+
+[project.urls]
+Homepage = "https://github.com/quazardous/wbox-mcp"
+Documentation = "https://github.com/quazardous/wbox-mcp/blob/main/docs/usage.md"
+Changelog = "https://github.com/quazardous/wbox-mcp/blob/main/CHANGELOG.md"
+Issues = "https://github.com/quazardous/wbox-mcp/issues"
 
 [project.scripts]
 wboxr = "wbox.cli.registry:main"

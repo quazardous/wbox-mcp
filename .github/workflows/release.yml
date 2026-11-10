@@ -1,0 +1,90 @@
+name: release
+
+# Pushing a tag vX.Y.Z publishes that version: to PyPI (trusted publishing,
+# no token stored here), and as a GitHub release whose notes are the
+# CHANGELOG's section for it.
+#
+# PyPI side, once: a trusted publisher for the project wbox-mcp, owner
+# quazardous, repository wbox-mcp, workflow release.yml, environment pypi.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    name: Build and check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: The tag is the package's version
+        run: |
+          version=$(python -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('src/wbox/__init__.py').read()).group(1))")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME but __version__ is $version" >&2
+            exit 1
+          fi
+          grep -q "^## \[$version\] - " CHANGELOG.md || {
+            echo "CHANGELOG.md has no section for $version" >&2; exit 1; }
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+
+      - name: The wheel installs and runs
+        run: |
+          python -m venv /tmp/v
+          /tmp/v/bin/pip install "$(ls dist/*.whl)[scenario]"
+          /tmp/v/bin/wboxr --version
+          /tmp/v/bin/python -c "import wbox.server, wbox.scenario, wbox.imaging, wbox.gamepad"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/wbox-mcp/
+    permissions:
+      id-token: write          # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: GitHub release
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Release with the CHANGELOG's section as notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md

@@ -11,7 +11,7 @@ It is made for the jobs a desktop gets in the way of:
 - **screenshot tours and recordings** — frames, gifs, and which frames changed;
 - **AI agents** — an MCP server exposes the same box to Claude or any MCP client.
 
-![LibreOffice Writer running inside wbox, headless](docs/images/writer-headless.png)
+![LibreOffice Writer running inside wbox, headless](https://raw.githubusercontent.com/quazardous/wbox-mcp/main/docs/images/writer-headless.png)
 
 *LibreOffice Writer, launched and typed into through wbox — captured with `headless: true`, so this window never rendered on anyone's desktop.*
 
@@ -71,9 +71,18 @@ curl -sSL https://raw.githubusercontent.com/quazardous/wbox-mcp/main/setup.sh | 
 irm https://raw.githubusercontent.com/quazardous/wbox-mcp/main/setup.ps1 | iex
 ```
 
-On Windows, read [docs/windows.md](docs/windows.md) first — isolation there comes from Windows Sandbox (`sandbox:` in config.yaml; Pro, Enterprise or Education), which the installer turns on, asking for admin rights; without it the app runs on your desktop. The installer sets up Python too if the machine has none.
+On Windows, read [docs/windows.md](https://github.com/quazardous/wbox-mcp/blob/main/docs/windows.md) first — isolation there comes from Windows Sandbox (`sandbox:` in config.yaml; Pro, Enterprise or Education), which the installer turns on, asking for admin rights; without it the app runs on your desktop. The installer sets up Python too if the machine has none.
 
 **What that script does**, so you can decide before running it: it installs the missing system packages through your distro's package manager (`dnf`, `apt` or `pacman`, asking first), clones this repo into `~/.local/share/wbox-mcp`, installs it into a venv there, and symlinks the two commands `wboxr` and `wbox-mcp` into `~/.local/bin`. It touches nothing else and needs `sudo` only for the packages.
+
+**From PyPI**, with the system packages of step 1 below installed first:
+
+```bash
+pipx install "wbox-mcp[scenario]"     # or: pip install "wbox-mcp[scenario]"
+```
+
+`[scenario]` adds numpy and Pillow, which scenarios and capture masks need;
+leave it out for the box alone.
 
 **Manual install**, if you'd rather not pipe a script into a shell:
 
@@ -159,7 +168,7 @@ Set `headless: true` and the nested session runs offscreen — no window on your
 
 **Windows** — the app is driven through Win32 APIs. With `sandbox:` it runs in Windows Sandbox, a throwaway Windows of its own that boots in about 15 seconds: the pointer, keyboard and clipboard wbox uses are the sandbox's, and yours are left alone. Without it, the app runs as a normal process on your desktop: it shares your desktop and your clipboard, and most clicks warp your real mouse cursor and pull the window to the front. Screenshots work even when the window is covered.
 
-Two things are safer than they used to be. `type_text` types the characters and never touches your clipboard. And when the app window can't be brought to the front, `click`, `mouse_move` and key combos refuse and name the window that is in the way, instead of clicking it. Elevated apps remain largely off-limits. [docs/windows.md](docs/windows.md) has what was measured to work, the limitations, and troubleshooting.
+Two things are safer than they used to be. `type_text` types the characters and never touches your clipboard. And when the app window can't be brought to the front, `click`, `mouse_move` and key combos refuse and name the window that is in the way, instead of clicking it. Elevated apps remain largely off-limits. [docs/windows.md](https://github.com/quazardous/wbox-mcp/blob/main/docs/windows.md) has what was measured to work, the limitations, and troubleshooting.
 
 ## Tools
 
@@ -244,7 +253,7 @@ sandbox's film is assembled on the host, where ffmpeg is.
 
 Driving an app by hand gives one-off pictures. Comparing a fix, two drivers or
 two GPUs needs the same run played again and again, its results side by side.
-A scenario is that run, written down — [examples/scenario.yaml](examples/scenario.yaml):
+A scenario is that run, written down — [examples/scenario.yaml](https://github.com/quazardous/wbox-mcp/blob/main/examples/scenario.yaml):
 
 ```yaml
 name: title-screen
@@ -315,11 +324,11 @@ numpy and Pillow: `pip install "wbox-mcp[scenario]"`.
 
 ## Documentation
 
-- [docs/usage.md](docs/usage.md) — CLI flags, config.yaml reference, MCP tools details, requirements
-- [docs/backends.md](docs/backends.md) — compositor comparison, input backends
-- [docs/matrix.md](docs/matrix.md) — what's verified to work on Linux, per compositor and backend
-- [docs/windows.md](docs/windows.md) — the Windows backend: install, input routing, measured status, limitations, troubleshooting
+- [docs/usage.md](https://github.com/quazardous/wbox-mcp/blob/main/docs/usage.md) — CLI flags, config.yaml reference, MCP tools details, requirements
+- [docs/backends.md](https://github.com/quazardous/wbox-mcp/blob/main/docs/backends.md) — compositor comparison, input backends
+- [docs/matrix.md](https://github.com/quazardous/wbox-mcp/blob/main/docs/matrix.md) — what's verified to work on Linux, per compositor and backend
+- [docs/windows.md](https://github.com/quazardous/wbox-mcp/blob/main/docs/windows.md) — the Windows backend: install, input routing, measured status, limitations, troubleshooting
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/quazardous/wbox-mcp/blob/main/LICENSE).
