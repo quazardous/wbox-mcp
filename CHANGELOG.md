@@ -11,6 +11,26 @@
 
 ### Added
 
+- **Scenarios: a run played again, and compared.** A scenario file writes a
+  run down — files and environment to start from, steps, waits on the screen
+  (`stable`, `match` against a reference) or on the app's output (`log`),
+  checkpoints — and `wboxr run` plays it into a directory of its own: the
+  checkpoint captures, when each was reached, the metrics read from a CSV,
+  and a manifest of what it ran on (GPU and driver, kernel, hashes of
+  everything it used). `wboxr compare` sets runs side by side: pixels that
+  differ at each checkpoint, with diff images, timings, metrics, and what
+  differs between the manifests. Waiting for states rather than sleeping is
+  what keeps runs in step when a load takes 4 s once and 6 s the next. Files
+  the scenario replaces are put back after the run. Also as MCP tools:
+  `run_scenario`, `compare_runs`, `suggest_mask`. Needs
+  `pip install "wbox-mcp[scenario]"` (numpy, Pillow).
+- **Capture masks.** Zones to ignore — rects in pixels or percentages, or a
+  PNG — wherever pixels are compared: waits, checkpoints, `compare`, and a
+  recording's changed frames. A ticking clock no longer keeps a screen from
+  ever counting as stable. Captures stay raw, so a mask can change and old
+  runs be compared again; `wboxr mask suggest` finds what changes between
+  runs at the same checkpoint.
+
 - **Driving a game: keys held across frames.** A game reads the keyboard once
   a frame, and a key pressed and released in the same instant falls between
   two: measured with an SDL game, ten `key("a")` gave ten key events and zero

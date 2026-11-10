@@ -390,6 +390,79 @@ _PAD_TOOLS = [
 ]
 
 
+_SCENARIO_TOOLS = [
+    Tool(
+        name="run_scenario",
+        description=(
+            "Play a scenario file: a run written down (setup, steps, waits on "
+            "the screen or the log, checkpoints) so it can be played again "
+            "and compared. Each run goes to runs/<name>/<date>/ with "
+            "manifest.json, results.json and the checkpoint captures. Takes "
+            "as long as the scenario: minutes for a game. The box must be "
+            "stopped first. Needs wbox-mcp[scenario]."),
+        inputSchema={"type": "object", "properties": {
+            "scenario": {"type": "string", "description": "Path to the scenario YAML"},
+            "repeat": {"type": "integer", "default": 1},
+            "label": {"type": "string", "description": "Appended to each run directory's name"},
+        }, "required": ["scenario"]},
+    ),
+    Tool(
+        name="compare_runs",
+        description=(
+            "Compare runs of one scenario against the first: per checkpoint, "
+            "the share of pixels that differ outside the mask and when it was "
+            "reached; metrics side by side; what differs between the "
+            "manifests (GPU, driver, scenario). Writes diff images."),
+        inputSchema={"type": "object", "properties": {
+            "runs": {"type": "array", "items": {"type": "string"}, "minItems": 2},
+            "mask": {"description": "Mask names from the scenario, or \"none\"; "
+                                    "default: each checkpoint's own"},
+            "tolerance": {"type": "integer"},
+        }, "required": ["runs"]},
+    ),
+    Tool(
+        name="suggest_mask",
+        description=(
+            "Zones that change between runs at the same checkpoint (a clock, "
+            "particles): candidates for the scenario's masks."),
+        inputSchema={"type": "object", "properties": {
+            "runs": {"type": "array", "items": {"type": "string"}, "minItems": 2},
+            "checkpoint": {"type": "string"},
+        }, "required": ["runs"]},
+    ),
+]
+
+
+def _call_scenario(compositor, cfg: dict, name: str, a: dict) -> str:
+    """The scenario tools, as text. A scenario builds its own box from its
+    own config, so this server's box must not be running under the same name."""
+    from wbox.scenario import (Run, ScenarioError, compare_runs, format_report,
+                               load_scenario, suggest_masks)
+    try:
+        if name == "run_scenario":
+            if compositor.is_running():
+                return "Error: this box is running; stop it before running a scenario"
+            sc = load_scenario(a["scenario"])
+            lines = []
+            for _ in range(max(1, int(a.get("repeat", 1)))):
+                r = Run(sc, config_path=None if sc.get("config") else cfg.get("_config_path"),
+                        label=a.get("label", ""), log=lambda *_: None).execute()
+                cps = ", ".join(f"{k} @{v['t']:.1f}s" for k, v in r["checkpoints"].items())
+                lines.append(f"{r['status']}: {r['run']}" + (f" — {r['reason']}" if r["reason"] else "")
+                             + (f"\n  checkpoints: {cps}" if cps else ""))
+            return "\n".join(lines)
+        if name == "compare_runs":
+            return format_report(compare_runs(a["runs"], mask=a.get("mask"),
+                                              tolerance=a.get("tolerance")))
+        found = suggest_masks(a["runs"], a.get("checkpoint"))
+        if not any(found.values()):
+            return "Nothing changes between these runs at their checkpoints."
+        return "\n".join(f"{cp}: " + ", ".join(f"[{r[0]}, {r[1]}, {r[2]}, {r[3]}]" for r in rects)
+                         for cp, rects in found.items() if rects)
+    except (ScenarioError, RuntimeError, ValueError, KeyError) as exc:
+        return f"Error: {exc}"
+
+
 def _call_pad(compositor, name: str, a: dict) -> dict:
     """Dispatch the pad_* tools."""
     if name == "pad_press":
@@ -785,7 +858,7 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                                 "type": {
                                     "type": "string",
                                     "enum": ["drag", "click", "scroll", "key",
-                                             "type_text"],
+                                             "type_text", "press", "pad_script"],
                                 },
                             },
                             "required": ["type"],
@@ -1134,6 +1207,7 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
 
         if cfg.get("gamepad") not in (None, False, "none", "off"):
             tools.extend(_PAD_TOOLS)
+        tools.extend(_SCENARIO_TOOLS)
 
         for name, tdef in script_tools.items():
             schema = tdef.get("schema", {"type": "object", "properties": {}})
@@ -1324,6 +1398,10 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
         if name == "key_up":
             result = await asyncio.to_thread(compositor.key_up, arguments.get("keys"))
             return _reply(result)
+
+        if name in ("run_scenario", "compare_runs", "suggest_mask"):
+            return [TextContent(type="text", text=await asyncio.to_thread(
+                _call_scenario, compositor, cfg, name, arguments))]
 
         if name.startswith("pad_"):
             return _reply(await asyncio.to_thread(_call_pad, compositor, name, arguments))

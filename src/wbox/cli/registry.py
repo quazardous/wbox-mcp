@@ -9,6 +9,9 @@ Usage:
     wboxr register [directory]         Register in .mcp.json
     wboxr unregister <name>            Remove from .mcp.json
     wboxr list                         Find instances in Claude settings
+    wboxr run <scenario.yaml> [OPTIONS]   Play a scenario (runs/<name>/<date>/)
+    wboxr compare <run> <run>... [OPTIONS]  Compare runs against the first
+    wboxr mask suggest <run> <run>...  Zones that change between runs: mask candidates
 
 Init options (non-interactive mode):
     --name NAME              Instance name
@@ -36,6 +39,26 @@ If no directory or --mcp-dir is given:
 Register options:
     --global                 Register in ~/.claude.json instead of .mcp.json
     --file PATH              Register in a specific file
+
+Run options:
+    --config PATH            The wbox config.yaml (default: the scenario's `config`)
+    --repeat N               Play it N times, one run directory each
+    --runs DIR               Where runs go (default: runs/ beside the scenario)
+    --label TEXT             Appended to the run directory's name (e.g. a driver)
+    -s, --set KEY=VALUE      Override a config value, as wbox-mcp serve -s
+
+Compare options:
+    --mask NAMES|none        Comma-separated mask names from the scenario, or none
+                             (default: each checkpoint's own mask)
+    --tolerance N            Channel difference below which pixels match (default 8)
+    --out DIR                Where the diff images and compare.json go
+    --json                   Print the report as JSON
+
+Mask suggest options:
+    --checkpoint NAME        Only this checkpoint
+    --cell N                 Grid cell in pixels (default 16)
+
+Scenarios need numpy and Pillow: pip install "wbox-mcp[scenario]".
 """
 
 from __future__ import annotations
@@ -785,6 +808,95 @@ def _print_claude_snippet(cfg: dict, config_path: Path):
 # ── Main ───────────────────────────────────────────────────────────
 
 
+def _split_opts(args: list[str], with_value: set[str], flags: set[str] = frozenset()):
+    """Positional arguments and options (--opt value, -s value, --flag)."""
+    pos, opts = [], {}
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in flags:
+            opts[a] = True
+        elif a in with_value:
+            if i + 1 >= len(args):
+                print(f"{a} needs a value", file=sys.stderr)
+                sys.exit(1)
+            opts.setdefault(a, []).append(args[i + 1])
+            i += 1
+        elif a.startswith("-"):
+            print(f"Unknown option: {a}", file=sys.stderr)
+            sys.exit(1)
+        else:
+            pos.append(a)
+        i += 1
+    return pos, opts
+
+
+def cmd_run(args: list[str]):
+    from wbox.scenario import Run, ScenarioError, load_scenario
+    pos, opts = _split_opts(args, {"--config", "--repeat", "--runs", "--label", "-s", "--set"})
+    if len(pos) != 1:
+        print("Usage: wboxr run <scenario.yaml> [--repeat N] [--config PATH] ...", file=sys.stderr)
+        sys.exit(1)
+    try:
+        sc = load_scenario(pos[0])
+    except ScenarioError as exc:
+        print(f"scenario: {exc}", file=sys.stderr)
+        sys.exit(2)
+    repeat = int((opts.get("--repeat") or ["1"])[-1])
+    failed = 0
+    runs = []
+    for i in range(max(1, repeat)):
+        r = Run(sc, runs_root=(opts.get("--runs") or [None])[-1],
+                config_path=(opts.get("--config") or [None])[-1],
+                overrides=(opts.get("-s") or []) + (opts.get("--set") or []),
+                label=(opts.get("--label") or [""])[-1]).execute()
+        runs.append(r["run"])
+        failed += r["status"] != "ok"
+    if len(runs) > 1:
+        print(f"{len(runs) - failed}/{len(runs)} runs ok. Compare them with:")
+        print("  wboxr compare " + " ".join(runs))
+    sys.exit(1 if failed else 0)
+
+
+def cmd_compare(args: list[str]):
+    from wbox.scenario import ScenarioError, compare_runs, format_report
+    pos, opts = _split_opts(args, {"--mask", "--tolerance", "--out"}, {"--json"})
+    mask = (opts.get("--mask") or [None])[-1]
+    if mask is not None and mask != "none":
+        mask = [m.strip() for m in mask.split(",") if m.strip()]
+    try:
+        report = compare_runs(pos, mask=mask,
+                              tolerance=int(opts["--tolerance"][-1]) if "--tolerance" in opts else None,
+                              out_dir=(opts.get("--out") or [None])[-1])
+    except (ScenarioError, RuntimeError, ValueError) as exc:
+        print(f"compare: {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(report, indent=1, default=str) if opts.get("--json") else format_report(report))
+
+
+def cmd_mask_suggest(args: list[str]):
+    from wbox.scenario import ScenarioError, suggest_masks
+    pos, opts = _split_opts(args, {"--checkpoint", "--cell", "--tolerance"})
+    try:
+        found = suggest_masks(pos, (opts.get("--checkpoint") or [None])[-1],
+                              int((opts.get("--tolerance") or ["8"])[-1]),
+                              int((opts.get("--cell") or ["16"])[-1]))
+    except (ScenarioError, RuntimeError, ValueError) as exc:
+        print(f"mask suggest: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if not any(found.values()):
+        print("Nothing changes between these runs at their checkpoints: no mask needed.")
+        return
+    print("# Zones that differ between the runs, per checkpoint. Paste what should be")
+    print("# ignored under `masks:` in the scenario, and check each against the captures.")
+    print("masks:")
+    for cp, rects in found.items():
+        if rects:
+            print(f"  {cp}:")
+            for r in rects:
+                print(f"    - {{rect: [{r[0]}, {r[1]}, {r[2]}, {r[3]}]}}")
+
+
 def main():
     args = sys.argv[1:]
 
@@ -830,6 +942,15 @@ def main():
         cmd_unregister(args[1:])
     elif cmd == "list":
         cmd_list()
+    elif cmd == "run":
+        cmd_run(args[1:])
+    elif cmd == "compare":
+        cmd_compare(args[1:])
+    elif cmd == "mask":
+        if len(args) < 2 or args[1] != "suggest":
+            print("Usage: wboxr mask suggest <run> <run>...", file=sys.stderr)
+            sys.exit(1)
+        cmd_mask_suggest(args[2:])
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         sys.exit(1)
