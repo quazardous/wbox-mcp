@@ -165,9 +165,58 @@ Two things are safer than they used to be. `type_text` types the characters and 
 
 The same set as MCP tools and as methods of a box in Python:
 
-`launch` · `stop` · `kill` · `screenshot` · `screen_changed` · `record` · `audio` · `click` · `dblclick` · `drag` · `scroll` · `hold` · `type_text` · `key` · `keys` · `mouse_move` · `get_mouse_position` · `get_size` · `resize` · `list_windows` · `focus_window` · `clipboard_read` · `clipboard_write` · `tail_log` · `clean` · `debug_input`
+`launch` · `stop` · `kill` · `screenshot` · `screen_changed` · `record` · `audio` · `click` · `dblclick` · `drag` · `scroll` · `hold` · `type_text` · `key` · `keys` · `press` · `key_down` · `key_up` · `mouse_move` · `get_mouse_position` · `get_size` · `resize` · `list_windows` · `focus_window` · `clipboard_read` · `clipboard_write` · `tail_log` · `clean` · `debug_input`
+
+With `gamepad:` set: `pad_press` · `pad_hold` · `pad_stick` · `pad_trigger` · `pad_script` · `pad_state` · `pad_neutral` · `pad_rumble`
 
 Plus custom script tools via `wboxr tool add` (MCP).
+
+### Driving a game
+
+A game is not a form. Two things differ, and wbox has a setting for each.
+
+**It reads the keyboard once a frame.** `key` sends the press and the release
+together, which a text field takes but a game misses: they land between two
+frames, and the key is never seen down. Measured with an SDL game polling at
+60 fps: ten `key("a")`, ten key-down events, **zero** frames with the key
+held. Give the press a duration — `key("a", hold_ms=50)`, or
+`key_hold_ms: 50` in config.yaml for every `key` and `keys` — and the same ten
+presses are ten. `press(["shift", "w"], 800)` holds keys together (run
+forward for 0.8 s); `key_down` / `key_up` keep them held across calls, while
+other calls turn the camera or take screenshots.
+
+**It reads a controller, through SDL, not through Wayland.** `gamepad:
+xbox360` (or `xboxone`) makes a virtual Xbox pad over `/dev/uinput`, before
+the app starts, with the vendor, product, buttons and axes of a real one, so
+SDL maps it from its own database like a pad plugged into USB. `pad_script`
+plays a timed sequence in one call (`"0.5:a,1:lup/1500,3:lt+rb"`, the syntax
+of Hookshot's `HOS_INPUT_SCRIPT`), and `pad_rumble` reports the vibration the
+game asked for.
+
+```yaml
+key_hold_ms: 50
+gamepad: xbox360          # or {profile: xboxone, isolate: true}
+```
+
+A uinput device belongs to the whole machine, so the box isolates the app in
+both directions: it runs under bubblewrap with a `/dev/input` holding the
+virtual pad's node and nothing else, and SDL's udev and HIDAPI lookups off.
+The app cannot see your real pads, keyboard or mouse; `isolate: false` turns
+this off. Other programs on the desktop can still see the virtual pad while
+the box runs.
+
+Requires write access to `/dev/uinput`, which most distributions keep for
+root:
+
+```bash
+echo 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"' \
+  | sudo tee /etc/udev/rules.d/60-wbox-uinput.rules
+sudo udevadm control --reload && sudo udevadm trigger /dev/uinput
+sudo usermod -aG input $USER     # then log in again
+```
+
+That rule lets any program of yours create input devices, not just wbox.
+Linux only (labwc, cage, weston), and `bwrap` for the isolation.
 
 `screen_changed` answers whether the display, or a region of it, differs from an earlier screenshot — optionally waiting for it to: an assertion on pixels that a window really moved or a view really changed.
 

@@ -160,6 +160,12 @@ class CompositorServer:
         # Last app command/env, kept for restart (separate-app backends)
         self._last_app_cmd: list[str] = []
         self._last_app_env: dict[str, str] = {}
+        # Games (#game-input): how long key()/keys() hold each key when the
+        # call does not say (0: press and release at once, the GUI default),
+        # and the virtual pad (config `gamepad`), set by build_compositor.
+        self.key_hold_ms: int = 0
+        self.gamepad_cfg = None
+        self._pad = None
 
     def _compositor_env(self) -> dict[str, str]:
         """Environment for the compositor process.
@@ -354,6 +360,7 @@ class CompositorServer:
             env["DISPLAY"] = self.state.x_display
         self._apply_audio_env(env)
         env.update(app_env)
+        app_cmd = self._wrap_app(app_cmd, env)
 
         log.info("Launching app in %s: %s", self.compositor_name, " ".join(app_cmd))
 
@@ -377,16 +384,208 @@ class CompositorServer:
             return self._launch(app_cmd, app_env)
         try:
             self._start_audio()
-        except RuntimeError as e:
+            self._start_gamepad()
+        except (RuntimeError, OSError) as e:
+            self._stop_audio()
+            self._stop_gamepad()
             return {"error": str(e)}
         try:
             result = self._launch(app_cmd, app_env)
         except BaseException:
             self._stop_audio()
+            self._stop_gamepad()
             raise
         if "error" in result:
             self._stop_audio()
+            self._stop_gamepad()
+        elif self._pad is not None:
+            result["gamepad"] = {"profile": self._pad.profile,
+                                 "node": self._pad.event_node,
+                                 "isolated": self._pad_isolated()}
         return result
+
+    # ── Gamepad (games) ─────────────────────────────────────────────
+    #
+    # A virtual Xbox pad over uinput (wbox/gamepad.py), made before the app
+    # starts so the app finds it at its first scan, as a pad already plugged
+    # in. Config: `gamepad: xbox360` (or xboxone), or a dict
+    # `{profile: xbox360, isolate: true}`. Left out: no pad.
+
+    def _gamepad_settings(self) -> tuple[str, bool] | None:
+        cfg = self.gamepad_cfg
+        if not cfg or cfg in ("none", "off"):
+            return None
+        if cfg is True:
+            return "xbox360", True
+        if isinstance(cfg, str):
+            return cfg, True
+        if isinstance(cfg, dict):
+            return cfg.get("profile", "xbox360"), bool(cfg.get("isolate", True))
+        raise RuntimeError(f"gamepad: expected a profile name or a dict, "
+                           f"got {cfg!r}")
+
+    def _pad_isolated(self) -> bool:
+        settings = self._gamepad_settings()
+        return bool(settings and settings[1])
+
+    def _start_gamepad(self) -> None:
+        settings = self._gamepad_settings()
+        if settings is None or self._pad is not None:
+            return
+        if self.compositor_name not in ("labwc", "cage", "weston"):
+            # mutter starts the app its own way, Windows has no uinput: a
+            # pad there would be made but never isolated, or not at all.
+            raise RuntimeError(f"gamepad is not supported with "
+                               f"{self.compositor_name} yet (labwc, cage, weston)")
+        from wbox.gamepad import VirtualGamepad
+        profile, _ = settings
+        self._pad = VirtualGamepad(profile).open()
+
+    def _stop_gamepad(self) -> None:
+        if self._pad is not None:
+            self._pad.close()
+            self._pad = None
+
+    def _wrap_app(self, app_cmd: list[str],
+                  env: dict[str, str]) -> list[str]:
+        """The app command as it must run: under the pad's isolation if any.
+
+        Updates env in place with what the isolation needs.
+        """
+        if self._pad is None or not self._pad_isolated() or not app_cmd:
+            return app_cmd
+        from wbox.gamepad import isolation_wrapper
+        prefix, extra = isolation_wrapper(self._pad.event_node)
+        env.update(extra)
+        return prefix + list(app_cmd)
+
+    def _need_pad(self):
+        if self._pad is None:
+            return None, {"error": "no gamepad in this box: set `gamepad: "
+                                   "xbox360` in config.yaml and launch again"}
+        return self._pad, None
+
+    def pad_press(self, buttons: list[str], hold_ms: int = 100) -> dict:
+        """Press buttons together for hold_ms, then release them."""
+        pad, err = self._need_pad()
+        if err:
+            return err
+        try:
+            pad.set_buttons(buttons, True)
+            try:
+                time.sleep(max(hold_ms, 0) / 1000.0)
+            finally:
+                pad.set_buttons(buttons, False)
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc)}
+        return {"ok": True, "pressed": buttons, "hold_ms": hold_ms}
+
+    def pad_hold(self, buttons: list[str], down: bool = True) -> dict:
+        """Leave buttons down (down=true) or release them (down=false)."""
+        pad, err = self._need_pad()
+        if err:
+            return err
+        try:
+            pad.set_buttons(buttons, down)
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc)}
+        return {"ok": True, "state": pad.state()}
+
+    def pad_stick(self, stick: str, x: float, y: float,
+                  hold_ms: int | None = None) -> dict:
+        """Tilt a stick (-1..1, y=-1 up); with hold_ms, recentre after."""
+        pad, err = self._need_pad()
+        if err:
+            return err
+        try:
+            pad.set_stick(stick, x, y)
+            if hold_ms is not None:
+                try:
+                    time.sleep(max(hold_ms, 0) / 1000.0)
+                finally:
+                    pad.set_stick(stick, 0, 0)
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc)}
+        return {"ok": True, "state": pad.state()}
+
+    def pad_trigger(self, trigger: str, value: float,
+                    hold_ms: int | None = None) -> dict:
+        """Pull a trigger (0..1); with hold_ms, release it after."""
+        pad, err = self._need_pad()
+        if err:
+            return err
+        try:
+            pad.set_trigger(trigger, value)
+            if hold_ms is not None:
+                try:
+                    time.sleep(max(hold_ms, 0) / 1000.0)
+                finally:
+                    pad.set_trigger(trigger, 0)
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc)}
+        return {"ok": True, "state": pad.state()}
+
+    def pad_state(self) -> dict:
+        pad, err = self._need_pad()
+        if err:
+            return err
+        return {"profile": pad.profile, "node": pad.event_node,
+                **pad.state()}
+
+    def pad_neutral(self) -> dict:
+        pad, err = self._need_pad()
+        if err:
+            return err
+        pad.neutral()
+        return {"ok": True}
+
+    def pad_rumble(self, clear: bool = False) -> dict:
+        pad, err = self._need_pad()
+        if err:
+            return err
+        return pad.rumble(clear)
+
+    def pad_script(self, script: str) -> dict:
+        """Play a timed sequence of presses, in one go.
+
+        `<seconds>:<input>[+<input>...][/<ms>]`, comma-separated, as
+        Hookshot's HOS_INPUT_SCRIPT: `0.5:A,2:LUP/1500,3:LT+RB`. An input
+        is a button, a d-pad direction, a trigger (fully pulled), or a stick
+        pushed to its edge (LUP LDOWN LLEFT LRIGHT, RUP ...). Held 200 ms
+        unless `/<ms>`. One call: the timing is the box's, not the round
+        trips between an agent and the server.
+        """
+        pad, err = self._need_pad()
+        if err:
+            return err
+        from wbox.gamepad import parse_pad_script, script_actions
+        try:
+            steps = parse_pad_script(script)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        timeline = []   # (time, order, fn): releases before presses at a tie
+        for start, inputs, ms in steps:
+            for kind, *args in inputs:
+                on, off = script_actions(pad, kind, args)
+                timeline.append((start, 1, on))
+                timeline.append((start + ms / 1000.0, 0, off))
+        timeline.sort(key=lambda e: (e[0], e[1]))
+        t0 = time.monotonic()
+        late = 0.0
+        try:
+            for when, _, fn in timeline:
+                delay = when - (time.monotonic() - t0)
+                if delay > 0:
+                    time.sleep(delay)
+                else:
+                    late = max(late, -delay)
+                fn()
+        except OSError as exc:
+            pad.neutral()
+            return {"error": f"pad_script failed: {exc}"}
+        return {"ok": True, "steps": len(steps),
+                "seconds": round(time.monotonic() - t0, 3),
+                "max_late_ms": round(late * 1000, 1)}
 
     def _start_audio(self) -> None:
         """The session's own audio server, before anything can play (#4702)."""
@@ -525,6 +724,16 @@ class CompositorServer:
             self.mouse_move(w // 2, h // 2)
         except ValueError:
             self.mouse_move(0, 0)
+
+        # That move is what gives the app its keyboard focus, and the app
+        # takes a moment to act on it: until then it drops keys, and SDL
+        # drops pad events too (it ignores them in a window without focus).
+        # Measured with an SDL app: a key sent right after launch is lost,
+        # one sent 0.2 s later arrives. Wait here rather than lose the
+        # caller's first input.
+        settle = self.timeouts.get("input_settle", 0.3)
+        if settle > 0:
+            time.sleep(settle)
 
         return {
             "status": "running",
@@ -672,6 +881,7 @@ class CompositorServer:
         self._vptr_close()
         self._stop_clipboard_owner()
         self._stop_audio()
+        self._stop_gamepad()
 
     def is_running(self) -> bool:
         if self.state.compositor_proc is not None:
@@ -961,9 +1171,12 @@ class CompositorServer:
         self._focus_active_window()
         return self._xdotool("type", "--delay", str(delay_ms), "--", text)
 
-    def key(self, shortcut: str) -> dict:
+    def key(self, shortcut: str, hold_ms: int | None = None) -> dict:
         if not self.is_running():
             return {"error": "compositor is not running"}
+        hold = self.key_hold_ms if hold_ms is None else hold_ms
+        if hold > 0:
+            return self.press([shortcut], hold)
         if self.input_backends["keyboard"] == "wbox-keyboard":
             return self._vptr_op("key_combo", shortcut)
         if self.input_backends["keyboard"] == "wtype":
@@ -971,13 +1184,28 @@ class CompositorServer:
         self._focus_active_window()
         return self._xdotool("key", "--", shortcut)
 
-    def keys(self, shortcuts: list[str], delay_ms: int = 100) -> dict:
+    def keys(self, shortcuts: list[str], delay_ms: int = 100,
+             hold_ms: int | None = None) -> dict:
         """Send a sequence of shortcuts, batched into one process when possible."""
         if not self.is_running():
             return {"error": "compositor is not running", "sent": 0}
         if not shortcuts:
             return {"ok": True, "sent": 0}
         delay_ms = max(delay_ms, 0)
+        hold = self.key_hold_ms if hold_ms is None else hold_ms
+        if hold > 0:
+            if self.input_backends["keyboard"] == "wbox-keyboard":
+                result = self._vptr_op("press_sequence", shortcuts, hold, delay_ms)
+                if "error" in result:
+                    return {"error": result["error"], "sent": 0}
+                return {"ok": True, "sent": len(shortcuts)}
+            for i, sc in enumerate(shortcuts):
+                if i and delay_ms:
+                    time.sleep(delay_ms / 1000.0)
+                result = self.press([sc], hold)
+                if "error" in result:
+                    return {"error": result["error"], "sent": i}
+            return {"ok": True, "sent": len(shortcuts)}
         if self.input_backends["keyboard"] == "wbox-keyboard":
             result = self._vptr_op("key_combos", shortcuts, delay_ms)
             if "error" in result:
@@ -993,6 +1221,88 @@ class CompositorServer:
         if "error" in result:
             return {"error": result["error"], "sent": 0}
         return {"ok": True, "sent": len(shortcuts)}
+
+    # ── Held keys (games) ──────────────────────────────────────────
+    #
+    # A game polls the keyboard once a frame: a press and release sent
+    # together fall between two frames and the game never sees the key down
+    # (measured: 10 key() calls, 10 KEYDOWN events, 0 frames with the key
+    # held). press() holds keys across frames; key_down/key_up leave them
+    # held between calls (walk while the camera turns).
+
+    def key_down(self, shortcuts: list[str]) -> dict:
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        backend = self.input_backends["keyboard"]
+        if backend == "wbox-keyboard":
+            result = self._vptr_op("key_down", shortcuts)
+            if "error" in result:
+                return result
+            return {"ok": True, "held": self._vptr_client().held_keys()}
+        if backend == "x11":
+            self._focus_active_window()
+            result = self._xdotool("keydown", "--", *[
+                "+".join(self._xdotool_keysym(p) for p in sc.split("+"))
+                for sc in shortcuts])
+            if "error" in result:
+                return result
+            self._x11_held = list(dict.fromkeys(
+                getattr(self, "_x11_held", []) + list(shortcuts)))
+            return {"ok": True, "held": self._x11_held}
+        return {"error": f"held keys need the wbox-keyboard or x11 keyboard "
+                         f"backend, not {backend}"}
+
+    def key_up(self, shortcuts: list[str] | None = None) -> dict:
+        """Release held keys; none named releases every one."""
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        backend = self.input_backends["keyboard"]
+        if backend == "wbox-keyboard":
+            # Not _vptr_op: a reconnect would make a new keyboard with
+            # nothing held, and the release would go nowhere.
+            try:
+                client = self._vptr_client()
+                client.key_up(shortcuts or None)
+            except (OSError, EOFError, RuntimeError, ValueError) as exc:
+                self._vptr_close()  # its keys are released with it
+                return {"error": f"key_up failed: {exc}"}
+            return {"ok": True, "held": client.held_keys()}
+        if backend == "x11":
+            held = getattr(self, "_x11_held", [])
+            release = list(shortcuts) if shortcuts else list(held)
+            if release:
+                result = self._xdotool("keyup", "--", *[
+                    "+".join(self._xdotool_keysym(p) for p in sc.split("+"))
+                    for sc in reversed(release)])
+                if "error" in result:
+                    return result
+            self._x11_held = [k for k in held if k not in release]
+            return {"ok": True, "held": self._x11_held}
+        return {"error": f"held keys need the wbox-keyboard or x11 keyboard "
+                         f"backend, not {backend}"}
+
+    def press(self, shortcuts: list[str], hold_ms: int = 50) -> dict:
+        """Press keys together, hold them hold_ms, release them."""
+        if not self.is_running():
+            return {"error": "compositor is not running"}
+        backend = self.input_backends["keyboard"]
+        if backend == "wbox-keyboard":
+            result = self._vptr_op("press", shortcuts, hold_ms)
+            if "error" in result:
+                return result
+            return {"ok": True, "pressed": shortcuts, "hold_ms": hold_ms}
+        before = set(getattr(self, "_x11_held", []))
+        down = self.key_down(shortcuts)
+        if "error" in down:
+            return down
+        try:
+            time.sleep(max(hold_ms, 0) / 1000.0)
+        finally:
+            mine = [k for k in shortcuts if k not in before]
+            up = self.key_up(mine) if mine else {"ok": True}
+        if "error" in up:
+            return up
+        return {"ok": True, "pressed": shortcuts, "hold_ms": hold_ms}
 
     def mouse_move(self, x: int, y: int) -> dict:
         if not self.is_running():

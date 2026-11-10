@@ -204,6 +204,12 @@ def _parse_shortcut(shortcut: str) -> tuple[int, int, list[int]]:
         mask |= mmask
         mod_codes.append(mcode)
 
+    if key.lower() in _MODIFIERS:
+        # A modifier pressed as the key itself ("shift" to run in a game):
+        # its event alone is not enough, the client also has to announce
+        # its mask, or the compositor's state never shows it held.
+        mmask, mcode = _MODIFIERS[key.lower()]
+        return mcode, mask | mmask, mod_codes
     sym = _KEY_ALIASES.get(key.lower(), key)
     if sym in KEYSYM_CODES:
         return KEYSYM_CODES[sym], mask, mod_codes
@@ -244,6 +250,11 @@ class WaylandClient:
         self._vptr_id = 0
         self._vkbd_mgr_id = 0
         self._vkbd_id = 0
+        # Keys left down by key_down, in press order: (shortcut, code, mask,
+        # mod_codes). Their modifier mask stays applied to every later event,
+        # so a key() in the middle of a held shift still reads as shifted.
+        self._held = []
+        self._held_mask = 0
         # Output size for motion_absolute extents. The real output size from
         # wl_output.mode is authoritative (compositors may ignore the
         # configured size — cage opens at 1280x720 regardless), and mode
@@ -268,6 +279,10 @@ class WaylandClient:
             self.sock = None
         self._vptr_id = 0
         self._vkbd_id = 0
+        # The virtual keyboard dies with the connection, and the compositor
+        # releases its keys: nothing is held any more.
+        self._held = []
+        self._held_mask = 0
 
     # ── Wire protocol ──
 
@@ -729,11 +744,11 @@ class WaylandClient:
                 time.sleep(delay)
             if shifted:
                 self._kbd_key(shift_code, PRESSED)
-                self._kbd_mods(MOD_SHIFT)
+                self._kbd_mods(self._held_mask | MOD_SHIFT)
             self._kbd_key(code, PRESSED)
             self._kbd_key(code, RELEASED)
             if shifted:
-                self._kbd_mods(0)
+                self._kbd_mods(self._held_mask)
                 self._kbd_key(shift_code, RELEASED)
         self.roundtrip()
 
@@ -742,11 +757,11 @@ class WaylandClient:
         for mc in mod_codes:
             self._kbd_key(mc, PRESSED)
         if mask:
-            self._kbd_mods(mask)
+            self._kbd_mods(self._held_mask | mask)
         self._kbd_key(code, PRESSED)
         self._kbd_key(code, RELEASED)
         if mask:
-            self._kbd_mods(0)
+            self._kbd_mods(self._held_mask)
         for mc in reversed(mod_codes):
             self._kbd_key(mc, RELEASED)
 
@@ -768,6 +783,79 @@ class WaylandClient:
                 time.sleep(delay)
             self._combo(s)
         self.roundtrip()
+
+    # ── Held keys (games) ──
+    #
+    # A game reads the keyboard's state once a frame. A press and its release
+    # sent in one batch arrive between two frames: the game gets the key
+    # events, but its state never shows the key down, so the press does
+    # nothing. Measured with an SDL game polling at 60 fps: 10 key() calls,
+    # 10 KEYDOWN events, 0 frames with the key down. A game needs the key
+    # held across at least one frame (50 ms covers three at 60 fps), and
+    # often several keys held together (run + jump).
+
+    def key_down(self, shortcuts):
+        """Press keys and leave them down until key_up (or disconnect)."""
+        parsed = [(s, *_parse_shortcut(s)) for s in shortcuts]
+        self._ensure_vkbd()
+        held_codes = {h[1] for h in self._held}
+        for s, code, mask, mod_codes in parsed:
+            if code in held_codes:
+                continue  # a second press of a held key would be a repeat
+            for mc in mod_codes:
+                self._kbd_key(mc, PRESSED)
+            self._held_mask |= mask
+            if mask:
+                self._kbd_mods(self._held_mask)
+            self._kbd_key(code, PRESSED)
+            self._held.append((s, code, mask, mod_codes))
+            held_codes.add(code)
+        self.roundtrip()
+
+    def key_up(self, shortcuts=None):
+        """Release held keys; None or [] releases every one, newest first."""
+        if shortcuts:
+            codes = {_parse_shortcut(s)[0] for s in shortcuts}
+            release = [h for h in self._held if h[1] in codes]
+        else:
+            release = list(self._held)
+        if not release or not self._vkbd_id:
+            return
+        for h in reversed(release):
+            _, code, _, mod_codes = h
+            self._held.remove(h)
+            self._kbd_key(code, RELEASED)
+            for mc in reversed(mod_codes):
+                self._kbd_key(mc, RELEASED)
+        self._held_mask = 0
+        for _, _, mask, _ in self._held:
+            self._held_mask |= mask
+        self._kbd_mods(self._held_mask)
+        self.roundtrip()
+
+    def held_keys(self):
+        return [h[0] for h in self._held]
+
+    def press(self, shortcuts, hold_ms):
+        """Press keys together, hold them hold_ms, release them always."""
+        before = {h[1] for h in self._held}
+        try:
+            self.key_down(shortcuts)
+            time.sleep(max(hold_ms, 0) / 1000.0)
+        finally:
+            # Release only what this call pressed: keys held before stay held.
+            mine = [h[0] for h in self._held if h[1] not in before]
+            if mine:
+                self.key_up(mine)
+
+    def press_sequence(self, shortcuts, hold_ms, delay_ms):
+        """press() each shortcut in turn, delay_ms between them."""
+        for s in shortcuts:
+            _parse_shortcut(s)  # validate all before pressing any
+        for i, s in enumerate(shortcuts):
+            if i and delay_ms > 0:
+                time.sleep(delay_ms / 1000.0)
+            self.press([s], hold_ms)
 
 
 def _now_ms():
