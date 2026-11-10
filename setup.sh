@@ -79,6 +79,14 @@ elif command -v pacman &>/dev/null; then
     PKG_MGR="pacman"
 fi
 
+# Image-based systems (Bazzite, Silverblue, Kinoite, SteamOS, ...) have dnf, but
+# the base image is read only: installing into it means layering and a reboot.
+# The usual answer there is a container, so point at one instead of failing.
+IMMUTABLE=false
+if [ -f /run/ostree-booted ] || command -v rpm-ostree &>/dev/null; then
+    IMMUTABLE=true
+fi
+
 # uv builds wbox's venv. Fedora and Arch package it; Debian/Ubuntu do not,
 # so there it comes from pipx when present, else the error names the ways.
 if ! command -v uv &>/dev/null; then
@@ -111,7 +119,7 @@ DEPS_MAP=(
     "cage:cage:cage:cage"
     "grim:grim:grim:grim"
     "weston-screenshooter:weston:weston:weston"
-    "xev:xorg-x11-utils:x11-utils:xorg-xev"
+    "xev:xev:x11-utils:xorg-xev"
     "xprop:xprop:x11-utils:xorg-xprop"
     "xclip:xclip:xclip:xclip"
     "xsel:xsel:xsel:xsel"
@@ -139,12 +147,30 @@ pkg_for() {
     done
 }
 
+container_recipe() {
+    local pkgs=("$@")
+    echo "This system is image-based, so its packages cannot be installed in place." >&2
+    echo "Run wbox in a container instead:" >&2
+    echo "" >&2
+    echo "  distrobox create --name wbox --image ghcr.io/ublue-os/fedora-toolbox:latest -Y" >&2
+    echo "  distrobox enter wbox -- sudo dnf install -y --skip-unavailable ${pkgs[*]}" >&2
+    echo "  distrobox enter wbox -- $SCRIPT_DIR/setup.sh --dev-mode --no-install-deps" >&2
+    echo "" >&2
+}
+
 install_pkgs() {
     local pkgs=("$@")
     [ ${#pkgs[@]} -eq 0 ] && return 0
+    if $IMMUTABLE; then
+        container_recipe "${pkgs[@]}"
+        exit 1
+    fi
     echo "Installing system packages: ${pkgs[*]}"
     case "$PKG_MGR" in
-        dnf)    sudo dnf install -y "${pkgs[@]}" ;;
+        # --skip-unavailable: dnf drops the whole transaction when one name is
+        # unknown, so a single package renamed by a new release would leave
+        # every other dependency uninstalled.
+        dnf)    sudo dnf install -y --skip-unavailable "${pkgs[@]}" ;;
         apt)    sudo apt-get install -y "${pkgs[@]}" ;;
         pacman) sudo pacman -S --noconfirm "${pkgs[@]}" ;;
     esac
@@ -224,11 +250,15 @@ if [ ${#ALL_MISSING[@]} -gt 0 ]; then
                 fi
             done
             if [ ${#PKGS[@]} -gt 0 ]; then
-                case "$PKG_MGR" in
-                    dnf)    echo "  sudo dnf install ${PKGS[*]}" ;;
-                    apt)    echo "  sudo apt-get install ${PKGS[*]}" ;;
-                    pacman) echo "  sudo pacman -S ${PKGS[*]}" ;;
-                esac
+                if $IMMUTABLE; then
+                    container_recipe "${PKGS[@]}"
+                else
+                    case "$PKG_MGR" in
+                        dnf)    echo "  sudo dnf install --skip-unavailable ${PKGS[*]}" ;;
+                        apt)    echo "  sudo apt-get install ${PKGS[*]}" ;;
+                        pacman) echo "  sudo pacman -S ${PKGS[*]}" ;;
+                    esac
+                fi
             fi
         fi
         echo ""
