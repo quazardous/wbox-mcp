@@ -21,11 +21,18 @@ frames, which the tests read:
                          keyboard focus; SDL drops pad events while it is lost
     dev_input            what /dev/input holds, as this process sees it
 
+What it draws, for the scenario tests: a dark background that turns blue
+on each press of a (and back), a "clock" in the top-right corner that
+changes every frame (what a mask is for), and, until frame 90, a "loading"
+bar that grows (so the screen settles only after it). It prints
+"game ready" once the bar is gone and "toggled <n>" on each press of a.
+
 Usage: game_dummy.py <state.json> [rumble_ms]
 """
 
 import json
 import os
+import random
 import sys
 
 os.environ.setdefault("SDL_VIDEODRIVER", "wayland")
@@ -57,7 +64,12 @@ def main():
     rumble_ms = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     pygame.init()
     controller.init()
-    screen = pygame.display.set_mode((640, 360))
+    if os.environ.get("GAME_DUMMY_FULLSCREEN"):
+        # Fills the output: screen coordinates are the game's, so a
+        # scenario's mask can name the clock's place
+        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    else:
+        screen = pygame.display.set_mode((640, 360))
     pygame.display.set_caption("game_dummy")
     clock = pygame.time.Clock()
     pads = []
@@ -103,7 +115,20 @@ def main():
             prev[name] = down
         if state[pygame.K_w] and state[pygame.K_LSHIFT]:
             seen["together"] += 1
-        screen.fill((30, 30, 30))
+        toggles = seen["keys"]["a"]["presses"]
+        if toggles != seen.get("_printed_toggles", 0):
+            seen["_printed_toggles"] = toggles
+            print(f"toggled {toggles}", flush=True)
+        screen.fill((30, 60, 160) if toggles % 2 else (30, 30, 30))
+        f = seen["frames"]
+        if f < 90:
+            pygame.draw.rect(screen, (220, 220, 220), (20, 300, 6 * f, 20))
+        elif f == 90:
+            print("game ready", flush=True)
+        # A colour drawn at random each frame: two runs never show the same
+        # clock at a checkpoint, however well a scenario keeps them in step
+        pygame.draw.rect(screen, (random.randrange(256), random.randrange(256), 80),
+                         (560, 10, 70, 30))
         pygame.display.flip()
         clock.tick(60)
         seen["frames"] += 1

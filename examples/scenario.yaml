@@ -1,0 +1,60 @@
+# A scenario: one run of an app, written down so it can be played again and
+# compared. `wboxr run scenario.yaml --repeat 3`, then
+# `wboxr compare runs/title-screen/*/`.
+#
+# Every path is relative to this file; ~ and {run} (this run's directory)
+# are expanded in paths and env values.
+
+name: title-screen
+description: From launch to the title screen, then into the first area.
+
+# The box: a wbox config.yaml (compositor, screen, app.command, gamepad...)
+config: config.yaml
+overrides:                 # over the config, for this scenario only
+  screen: 1280x720
+  key_hold_ms: 50
+
+setup:
+  # Files put in place before the launch. What they replace is moved aside
+  # and put back after the run, failed or not.
+  copy:
+    saves/start.sav: ~/.local/share/mygame/save.sav
+    options.ini: ~/Games/mygame/options.ini
+  env:                     # added to the app's environment
+    FRAME_LOG: "{run}/frames.csv"
+
+# Zones to ignore when pixels are compared: rects in pixels or percentages
+# of the screen, or a PNG where black (or transparent) is ignored.
+masks:
+  clock: [{rect: ["85%", "2%", "13%", "6%"]}]
+  hud:
+    - {rect: [0, 0, 320, 90]}
+    - {rect: [1100, 600, 180, 120]}
+default_mask: [clock]      # for waits and checkpoints that do not say
+tolerance: 8               # a pixel differs when a channel moves more than this
+
+steps:
+  # Wait for states, not for durations: every run is back in step here.
+  - wait: {log: "renderer ready", timeout: 120}       # in the app's stdout/stderr
+  - wait: {stable: 2.0, timeout: 60}                  # nothing moves for 2 s
+  - wait: {match: refs/title.png, threshold: 0.05, timeout: 30}
+  - checkpoint: title
+
+  - press: {keys: [enter], hold_ms: 80}
+  - wait: {stable: 1.0, timeout: 60, mask: [clock, hud]}
+  - checkpoint: {name: menu, mask: [clock, hud]}
+
+  - pad_script: "0:a,1.5:a"                           # a virtual pad: gamepad: xbox360
+  - wait: {log: "area loaded", since: step, timeout: 90}
+  - record: {seconds: 5, name: walk, mask: [hud],
+             during: {type: pad_script, script: "0:lup/5000"}}
+  - checkpoint: {name: walked, mask: [clock, hud]}
+
+collect:                   # copied into the run's collected/
+  - ~/Games/mygame/game_log.txt
+
+metrics:                   # mean and percentiles of a CSV column
+  - {name: frametime, file: "{run}/frames.csv", column: ms, unit: ms}
+
+manifest:                  # commands whose output goes in manifest.json
+  app_version: git -C ~/src/mygame rev-parse --short HEAD

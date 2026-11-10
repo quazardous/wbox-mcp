@@ -11,6 +11,26 @@
 
 ### Added
 
+- **Scenarios: a run played again, and compared.** A scenario file writes a
+  run down — files and environment to start from, steps, waits on the screen
+  (`stable`, `match` against a reference) or on the app's output (`log`),
+  checkpoints — and `wboxr run` plays it into a directory of its own: the
+  checkpoint captures, when each was reached, the metrics read from a CSV,
+  and a manifest of what it ran on (GPU and driver, kernel, hashes of
+  everything it used). `wboxr compare` sets runs side by side: pixels that
+  differ at each checkpoint, with diff images, timings, metrics, and what
+  differs between the manifests. Waiting for states rather than sleeping is
+  what keeps runs in step when a load takes 4 s once and 6 s the next. Files
+  the scenario replaces are put back after the run. Also as MCP tools:
+  `run_scenario`, `compare_runs`, `suggest_mask`. Needs
+  `pip install "wbox-mcp[scenario]"` (numpy, Pillow).
+- **Capture masks.** Zones to ignore — rects in pixels or percentages, or a
+  PNG — or the only zones to look at (`only`: a menu over a background
+  video), wherever pixels are compared: waits, checkpoints, `compare`, and a
+  recording's changed frames. A ticking clock no longer keeps a screen from
+  ever counting as stable. Captures stay raw, so a mask can change and old
+  runs be compared again; `wboxr mask suggest` finds what changes between
+  runs at the same checkpoint.
 - **A real controller can drive the box's pad** (#17). `pad_proxy` reads a
   controller plugged into the host and replays it on the virtual pad, so a
   game in a box can be played by hand instead of only by script — the quickest
@@ -31,7 +51,7 @@
   box a pad made over `/dev/uinput`, which SDL maps from its own database like
   one plugged into USB: buttons, d-pad, analog sticks and triggers
   (`pad_press`, `pad_hold`, `pad_stick`, `pad_trigger`), timed sequences in
-  one call (`pad_script`, in the syntax of Hookshot's `HOS_INPUT_SCRIPT`), and
+  one call (`pad_script`: `<seconds>:<input>[+<input>...][/<ms>]`), and
   the rumble the game asks for (`pad_rumble`). The app runs under bubblewrap
   with this pad as its only input device: it cannot see your real pads,
   keyboard or mouse. Needs write access to `/dev/uinput` (a udev rule, in the

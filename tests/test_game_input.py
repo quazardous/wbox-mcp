@@ -62,7 +62,7 @@ class TestParsing:
         assert gp._ui_get_sysname(64) == 0x8040552c
         assert struct.calcsize(gp._EVENT_FMT) == 24
 
-    def test_script_syntax_is_hookshots(self):
+    def test_script_syntax(self):
         steps = gp.parse_pad_script("0.5:A,2:LUP/1500,3:ZL+R,4:plus")
         assert steps == [
             (0.5, [("button", "a")], 200),

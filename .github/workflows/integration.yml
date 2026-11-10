@@ -90,7 +90,9 @@ jobs:
         #   weston, cage — not needed while this job runs labwc only.
 
       - name: Install wbox
-        run: pip install -e ".[test,mutter]"
+        # scenario: numpy and Pillow, to compare captures; pygame-ce runs
+        # tests/game-dummy, which reads its input the way a game does
+        run: pip install -e ".[test,mutter,scenario]" pygame-ce
 
 
       - name: Report the toolchain
@@ -110,6 +112,11 @@ jobs:
       - name: Integration suite — labwc + hybrid
         run: |
           .github/scripts/run-suite.sh
+
+      # Held keys and scenarios against an SDL game. The virtual-pad tests
+      # skip here: they need write access to /dev/uinput and bwrap.
+      - name: Game input and scenarios — labwc
+        run: python -m pytest tests/test_game_input.py tests/test_scenario.py -v -rs
 
       # Platform-free: the Windows Sandbox mode's channel and config.
       - name: Sandbox channel

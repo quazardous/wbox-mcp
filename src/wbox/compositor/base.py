@@ -166,6 +166,9 @@ class CompositorServer:
         self.key_hold_ms: int = 0
         self.gamepad_cfg = None
         self._pad = None
+        # Where the app's stdout and stderr go (a scenario reads them);
+        # None discards them, as before.
+        self.app_output: Path | None = None
         self._pad_proxy = None        # a real controller mirrored onto it
 
     def _compositor_env(self) -> dict[str, str]:
@@ -389,12 +392,20 @@ class CompositorServer:
 
         log.info("Launching app in %s: %s", self.compositor_name, " ".join(app_cmd))
 
-        self.state.app_proc = subprocess.Popen(
-            app_cmd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        out = subprocess.DEVNULL
+        if self.app_output is not None:
+            self.app_output.parent.mkdir(parents=True, exist_ok=True)
+            out = open(self.app_output, "ab")
+        try:
+            self.state.app_proc = subprocess.Popen(
+                app_cmd,
+                env=env,
+                stdout=out,
+                stderr=subprocess.STDOUT if out is not subprocess.DEVNULL else subprocess.DEVNULL,
+            )
+        finally:
+            if out is not subprocess.DEVNULL:
+                out.close()  # the child holds its own copy
         self.state.app_pid = self.state.app_proc.pid
 
     # ── Lifecycle ───────────────────────────────────────────────────
@@ -615,7 +626,7 @@ class CompositorServer:
         """Play a timed sequence of presses, in one go.
 
         `<seconds>:<input>[+<input>...][/<ms>]`, comma-separated, as
-        Hookshot's HOS_INPUT_SCRIPT: `0.5:A,2:LUP/1500,3:LT+RB`. An input
+        for example `0.5:A,2:LUP/1500,3:LT+RB`. An input
         is a button, a d-pad direction, a trigger (fully pulled), or a stick
         pushed to its edge (LUP LDOWN LLEFT LRIGHT, RUP ...). Held 200 ms
         unless `/<ms>`. One call: the timing is the box's, not the round
@@ -1167,7 +1178,11 @@ class CompositorServer:
                 r = self.scroll(during["x"], during["y"], during["notches"],
                                 during.get("horizontal", False))
             elif kind == "key":
-                r = self.key(during["key"])
+                r = self.key(during["key"], during.get("hold_ms"))
+            elif kind == "press":
+                r = self.press(during["keys"], during.get("hold_ms", 50))
+            elif kind == "pad_script":
+                r = self.pad_script(during["script"])
             elif kind == "type_text":
                 r = self.type_text(during["text"], during.get("delay_ms", 12))
             else:

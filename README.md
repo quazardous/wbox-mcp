@@ -189,9 +189,9 @@ other calls turn the camera or take screenshots.
 xbox360` (or `xboxone`) makes a virtual Xbox pad over `/dev/uinput`, before
 the app starts, with the vendor, product, buttons and axes of a real one, so
 SDL maps it from its own database like a pad plugged into USB. `pad_script`
-plays a timed sequence in one call (`"0.5:a,1:lup/1500,3:lt+rb"`, the syntax
-of Hookshot's `HOS_INPUT_SCRIPT`), and `pad_rumble` reports the vibration the
-game asked for.
+plays a timed sequence in one call (`"0.5:a,1:lup/1500,3:lt+rb"`:
+`<seconds>:<input>[+<input>...][/<ms>]`), and `pad_rumble` reports the
+vibration the game asked for.
 
 ```yaml
 key_hold_ms: 50
@@ -239,6 +239,72 @@ to read.
 On Windows it films the app's window, in Windows Sandbox too — measured there,
 17 frames/s for an 800×600 window and 32/s for a 300×200 region — and a
 sandbox's film is assembled on the host, where ffmpeg is.
+
+### Scenarios: a run played again, and compared
+
+Driving an app by hand gives one-off pictures. Comparing a fix, two drivers or
+two GPUs needs the same run played again and again, its results side by side.
+A scenario is that run, written down — [examples/scenario.yaml](examples/scenario.yaml):
+
+```yaml
+name: title-screen
+config: config.yaml
+setup:
+  copy: {saves/start.sav: ~/.local/share/game/save.sav}   # put back after the run
+  env:  {FRAME_LOG: "{run}/frames.csv"}
+masks:
+  clock: [{rect: ["85%", "2%", "13%", "6%"]}]             # pixels or %
+  water: [{image: masks/water.png}]                       # black = ignored
+  menu:  [{only: [480, 545, 320, 85]}]                    # this alone is compared
+default_mask: [clock]
+steps:
+  - wait: {log: "renderer ready", timeout: 120}           # the app's output
+  - wait: {stable: 2.0, timeout: 60}                      # the screen holds still
+  - wait: {match: refs/title.png, threshold: 0.05}        # looks like a reference
+  - checkpoint: title
+  - pad_script: "0:a,1.5:a"
+  - record: {seconds: 5, name: walk, during: {type: pad_script, script: "0:lup/5000"}}
+  - checkpoint: {name: walked, mask: [clock, water]}
+metrics:
+  - {name: frametime, file: "{run}/frames.csv", column: ms, unit: ms}
+```
+
+```bash
+wboxr run title-screen.yaml --repeat 5        # runs/title-screen/<date>/ ×5
+wboxr compare runs/title-screen/*/            # against the first
+wboxr mask suggest runs/title-screen/*/       # what changes between them
+```
+
+**Why it waits instead of sleeping.** Loading takes 4 s on one run and 6 s on
+the next: inputs at fixed times land on different frames, and captures at
+"t = 10 s" show different things. Each `wait` is a point where every run is
+back in step, and the checkpoints are taken at those points. When the app can
+count its own frames (an input script timed in game frames), let it: that is
+deterministic where wbox, outside, can only wait.
+
+**Masks.** A clock, particles, water: some pixels are never the same twice. A
+mask names zones to ignore, and applies everywhere pixels are compared — a
+`stable` wait would otherwise never end on a ticking clock. An `only` zone
+works the other way: everything outside it is ignored, for a menu over a
+background video that never holds still. Captures are kept
+raw, so a mask can change and old runs be compared again. `mask suggest`
+finds the zones that differ between runs at the same checkpoint.
+
+**What a run keeps.** `manifest.json`: wbox, the kernel, the CPU, each GPU and
+its driver (from `vulkaninfo`), hashes of the scenario, the config, the setup
+files and the masks, and the output of any `manifest:` commands (the app's
+version). `results.json`: every step and its duration, when each checkpoint
+was reached, the metrics. `checkpoints/*.png`, `app.log`, the `collect:`ed
+files. `compare` reports, per checkpoint, the share of pixels that differ
+outside the mask and the time it was reached, writes diff images (differences
+in red, masked zones hatched), puts the metrics side by side, and lists what
+differs between the manifests: a different driver, or a scenario edited
+between two runs.
+
+Steps are the box's tools with the same arguments (`key`, `press`,
+`pad_script`, `click`, ...) plus `wait`, `checkpoint`, `record` and `sleep`.
+The same through MCP: `run_scenario`, `compare_runs`, `suggest_mask`. Needs
+numpy and Pillow: `pip install "wbox-mcp[scenario]"`.
 
 ### When something goes wrong
 
