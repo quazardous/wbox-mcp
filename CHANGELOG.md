@@ -9,7 +9,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Driving a game: keys held across frames.** A game reads the keyboard once
+  a frame, and a key pressed and released in the same instant falls between
+  two: measured with an SDL game, ten `key("a")` gave ten key events and zero
+  frames with the key down, so the game never moved. `key` and `keys` take a
+  `hold_ms` (or `key_hold_ms: 50` in config.yaml for all of them), `press`
+  holds several keys together (`["shift", "w"]` to run), and `key_down` /
+  `key_up` keep keys held across calls. A modifier can now be the key itself.
+- **A virtual Xbox controller.** `gamepad: xbox360` (or `xboxone`) gives the
+  box a pad made over `/dev/uinput`, which SDL maps from its own database like
+  one plugged into USB: buttons, d-pad, analog sticks and triggers
+  (`pad_press`, `pad_hold`, `pad_stick`, `pad_trigger`), timed sequences in
+  one call (`pad_script`, in the syntax of Hookshot's `HOS_INPUT_SCRIPT`), and
+  the rumble the game asks for (`pad_rumble`). The app runs under bubblewrap
+  with this pad as its only input device: it cannot see your real pads,
+  keyboard or mouse. Needs write access to `/dev/uinput` (a udev rule, in the
+  README) and `bwrap`; Linux, with labwc, cage or weston.
+
 ### Fixed
+
+- **The first key or pad press after `launch` was lost.** `launch` ends by
+  moving the pointer onto the app, which gives it the keyboard focus, and
+  returned before the app had taken it: an SDL app dropped the key sent next,
+  and SDL drops pad events in a window without focus too. `launch` now waits
+  `timeouts.input_settle` (0.3 s) for it.
 
 - **`setup.sh` installed nothing on Fedora 41** (and any release that renames a
   package). The dependency list still asked for `xorg-x11-utils`, which Fedora

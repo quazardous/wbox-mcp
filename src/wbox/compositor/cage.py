@@ -52,6 +52,8 @@ class CageCompositor(CompositorServer):
 
         cage_cmd = ["cage", "--"]
         inner: list[str] = []
+        app_env = dict(app_env)
+        app_cmd = self._wrap_app(app_cmd, app_env)   # the pad's isolation
         if app_env:
             inner.append("env")
             for k, v in app_env.items():

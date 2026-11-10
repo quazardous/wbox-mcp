@@ -113,6 +113,27 @@ def _audio_mode(cfg: dict, backend: str, headless: bool) -> str:
 
 def build_compositor(cfg: dict) -> CompositorServer:
     """Build a compositor backend from config."""
+    comp = _build_backend(cfg)
+    _apply_game_settings(comp, cfg)
+    return comp
+
+
+def _apply_game_settings(comp: CompositorServer, cfg: dict) -> None:
+    """The game settings: read at each launch, not fixed at build time.
+
+    key_hold_ms: how long key/keys hold a key when the call does not say
+    (a game polls once a frame and misses a press shorter than one).
+    gamepad: a virtual Xbox pad, made at launch (wbox/gamepad.py).
+    """
+    try:
+        comp.key_hold_ms = max(int(cfg.get("key_hold_ms", 0) or 0), 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"key_hold_ms: expected milliseconds, "
+                         f"got {cfg.get('key_hold_ms')!r}") from None
+    comp.gamepad_cfg = cfg.get("gamepad")
+
+
+def _build_backend(cfg: dict) -> CompositorServer:
     # Auto-detect backend on Windows if not specified
     default_backend = "win32" if sys.platform == "win32" else "labwc"
     backend = cfg.get("compositor", default_backend)
@@ -290,6 +311,104 @@ def _build_app_env(cfg: dict) -> dict[str, str]:
     """Build app environment from config."""
     app_cfg = cfg.get("app", {})
     return dict(app_cfg.get("env", {}))
+
+
+_PAD_BUTTONS_DOC = (
+    "Xbox names: a b x y lb rb lt rt back start guide ls rs, d-pad up down "
+    "left right (aliases: l r zl zr plus minus home view menu ...)")
+
+_PAD_TOOLS = [
+    Tool(
+        name="pad_press",
+        description="Press gamepad buttons together, hold them, release them. " + _PAD_BUTTONS_DOC,
+        inputSchema={"type": "object", "properties": {
+            "buttons": {"type": "array", "items": {"type": "string"}},
+            "hold_ms": {"type": "integer", "default": 100},
+        }, "required": ["buttons"]},
+    ),
+    Tool(
+        name="pad_hold",
+        description="Leave gamepad buttons down (down=true) or release them (down=false). " + _PAD_BUTTONS_DOC,
+        inputSchema={"type": "object", "properties": {
+            "buttons": {"type": "array", "items": {"type": "string"}},
+            "down": {"type": "boolean", "default": True},
+        }, "required": ["buttons"]},
+    ),
+    Tool(
+        name="pad_stick",
+        description=(
+            "Tilt a stick: x, y from -1 to 1, y=-1 is pushed up (forward). "
+            "With hold_ms it recentres after; without, it stays tilted."),
+        inputSchema={"type": "object", "properties": {
+            "stick": {"type": "string", "enum": ["left", "right"]},
+            "x": {"type": "number"}, "y": {"type": "number"},
+            "hold_ms": {"type": "integer"},
+        }, "required": ["stick", "x", "y"]},
+    ),
+    Tool(
+        name="pad_trigger",
+        description="Pull a trigger (lt or rt) from 0 to 1; with hold_ms it is released after.",
+        inputSchema={"type": "object", "properties": {
+            "trigger": {"type": "string", "enum": ["lt", "rt"]},
+            "value": {"type": "number", "default": 1},
+            "hold_ms": {"type": "integer"},
+        }, "required": ["trigger"]},
+    ),
+    Tool(
+        name="pad_script",
+        description=(
+            "Play a timed gamepad sequence in one call, precise to a few ms: "
+            "'<seconds>:<input>[+<input>...][/<ms>]' comma-separated, e.g. "
+            "'0.5:a,1:lup/1500,3:lt+rb'. Inputs: buttons, d-pad, lt/rt, and "
+            "sticks at their edge LUP LDOWN LLEFT LRIGHT RUP RDOWN RLEFT "
+            "RRIGHT. Held 200 ms unless /<ms>. Same syntax as Hookshot's "
+            "HOS_INPUT_SCRIPT."),
+        inputSchema={"type": "object", "properties": {
+            "script": {"type": "string"},
+        }, "required": ["script"]},
+    ),
+    Tool(
+        name="pad_state",
+        description="What the virtual gamepad shows now: buttons down, sticks, triggers",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="pad_neutral",
+        description="Release every gamepad button, centre the sticks, release the triggers",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="pad_rumble",
+        description=(
+            "The rumble the game asked the gamepad for: whether it is "
+            "shaking now (strong/weak 0..1) and the recent rumble events"),
+        inputSchema={"type": "object", "properties": {
+            "clear": {"type": "boolean", "default": False,
+                      "description": "Empty the event log after reading it"},
+        }},
+    ),
+]
+
+
+def _call_pad(compositor, name: str, a: dict) -> dict:
+    """Dispatch the pad_* tools."""
+    if name == "pad_press":
+        return compositor.pad_press(a["buttons"], a.get("hold_ms", 100))
+    if name == "pad_hold":
+        return compositor.pad_hold(a["buttons"], a.get("down", True))
+    if name == "pad_stick":
+        return compositor.pad_stick(a["stick"], a["x"], a["y"], a.get("hold_ms"))
+    if name == "pad_trigger":
+        return compositor.pad_trigger(a["trigger"], a.get("value", 1), a.get("hold_ms"))
+    if name == "pad_script":
+        return compositor.pad_script(a["script"])
+    if name == "pad_state":
+        return compositor.pad_state()
+    if name == "pad_neutral":
+        return compositor.pad_neutral()
+    if name == "pad_rumble":
+        return compositor.pad_rumble(a.get("clear", False))
+    return {"error": f"unknown tool {name}"}
 
 
 def _reply(result) -> list[TextContent]:
@@ -819,6 +938,14 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                             "type": "string",
                             "description": "Key combination",
                         },
+                        "hold_ms": {
+                            "type": "integer",
+                            "description": (
+                                "Hold the key this long before releasing it. "
+                                "A game reads the keyboard once a frame and "
+                                "misses a key released at once: use 50 or more "
+                                "(default: config key_hold_ms, else 0)"),
+                        },
                     },
                     "required": ["shortcut"],
                 },
@@ -848,6 +975,53 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                             "description": "Delay in milliseconds between each key press (default 100)",
                             "default": 100,
                         },
+                        "hold_ms": {
+                            "type": "integer",
+                            "description": "Hold each key this long (games: 50+; default: config key_hold_ms, else 0)",
+                        },
+                    },
+                },
+            ),
+            Tool(
+                name="press",
+                description=(
+                    "Press keys together, hold them, release them: for games, "
+                    "which poll the keyboard once a frame. ['shift', 'w'] "
+                    "held 800 ms runs forward for 0.8 s."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "keys": {"type": "array", "items": {"type": "string"},
+                                 "description": "Keys held together, e.g. ['w', 'shift']"},
+                        "hold_ms": {"type": "integer", "default": 50,
+                                    "description": "How long they stay down"},
+                    },
+                    "required": ["keys"],
+                },
+            ),
+            Tool(
+                name="key_down",
+                description=(
+                    "Press keys and leave them down until key_up: walk "
+                    "forward while other calls turn the camera or take "
+                    "screenshots. Every held key is released at stop."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "keys": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["keys"],
+                },
+            ),
+            Tool(
+                name="key_up",
+                description="Release keys held by key_down (none named: all of them)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "keys": {"type": "array", "items": {"type": "string"}},
                     },
                 },
             ),
@@ -958,6 +1132,9 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
             ),
         ]
 
+        if cfg.get("gamepad") not in (None, False, "none", "off"):
+            tools.extend(_PAD_TOOLS)
+
         for name, tdef in script_tools.items():
             schema = tdef.get("schema", {"type": "object", "properties": {}})
             tools.append(
@@ -1001,6 +1178,10 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 # time (post_launch_keys, script tools) sees the fresh values.
                 cfg.clear()
                 cfg.update(fresh)
+                try:
+                    _apply_game_settings(compositor, cfg)
+                except ValueError as exc:
+                    return [TextContent(type="text", text=f"refused to launch: {exc}")]
 
             # Run pre-launch scripts
             cwd = str(Path(cfg.get("_config_dir", ".")).resolve())
@@ -1127,8 +1308,25 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
             return _reply(result)
 
         if name == "key":
-            result = await asyncio.to_thread(compositor.key, arguments["shortcut"])
+            result = await asyncio.to_thread(
+                compositor.key, arguments["shortcut"], arguments.get("hold_ms"))
             return _reply(result)
+
+        if name == "press":
+            result = await asyncio.to_thread(
+                compositor.press, arguments["keys"], arguments.get("hold_ms", 50))
+            return _reply(result)
+
+        if name == "key_down":
+            result = await asyncio.to_thread(compositor.key_down, arguments["keys"])
+            return _reply(result)
+
+        if name == "key_up":
+            result = await asyncio.to_thread(compositor.key_up, arguments.get("keys"))
+            return _reply(result)
+
+        if name.startswith("pad_"):
+            return _reply(await asyncio.to_thread(_call_pad, compositor, name, arguments))
 
         if name == "keys":
             shortcuts = arguments.get("shortcuts")
@@ -1139,7 +1337,8 @@ def create_server(cfg: dict) -> tuple[Server, CompositorServer]:
                 repeat = arguments.get("repeat", 1)
                 shortcuts = [shortcut] * repeat
             delay_ms = arguments.get("delay_ms", 100)
-            result = await asyncio.to_thread(compositor.keys, shortcuts, delay_ms)
+            result = await asyncio.to_thread(
+                compositor.keys, shortcuts, delay_ms, arguments.get("hold_ms"))
             if "error" in result:
                 text = f"Sent {result.get('sent', 0)}/{len(shortcuts)} keys\n{result['error']}"
             else:
