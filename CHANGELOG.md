@@ -11,6 +11,15 @@
 
 ### Added
 
+- **A real controller can drive the box's pad** (#17). `pad_proxy` reads a
+  controller plugged into the host and replays it on the virtual pad, so a
+  game in a box can be played by hand instead of only by script — the quickest
+  way to reach the place where a bug shows. `pad_proxy("auto")` finds the
+  first real pad that is not the box's own, or name its event node; `grab`
+  takes it for the session so it stops driving the host desktop as well, and
+  `pad_proxy_stop` gives it back and leaves the pad neutral. The app still
+  sees the virtual pad alone: the real device is read outside the sandbox and
+  never enters it.
 - **Driving a game: keys held across frames.** A game reads the keyboard once
   a frame, and a key pressed and released in the same instant falls between
   two: measured with an SDL game, ten `key("a")` gave ten key events and zero
