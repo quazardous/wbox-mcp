@@ -166,6 +166,7 @@ class CompositorServer:
         self.key_hold_ms: int = 0
         self.gamepad_cfg = None
         self._pad = None
+        self._pad_proxy = None        # a real controller mirrored onto it
 
     def _compositor_env(self) -> dict[str, str]:
         """Environment for the compositor process.
@@ -442,6 +443,12 @@ class CompositorServer:
         self._pad = VirtualGamepad(profile).open()
 
     def _stop_gamepad(self) -> None:
+        if self._pad_proxy is not None:
+            try:
+                self._pad_proxy.stop()
+            except Exception:                 # a box being torn down anyway
+                pass
+            self._pad_proxy = None
         if self._pad is not None:
             self._pad.close()
             self._pad = None
@@ -524,6 +531,41 @@ class CompositorServer:
         except (ValueError, OSError) as exc:
             return {"error": str(exc)}
         return {"ok": True, "state": pad.state()}
+
+    def pad_proxy(self, device: str = "auto", grab: bool = False) -> dict:
+        """Mirror a real controller onto the box's virtual pad.
+
+        `device` is an event node, or "auto" for the first real pad that is
+        not this box's own. `grab` takes the real pad for the session, so it
+        stops driving the host desktop as well. The app still sees only the
+        virtual pad: the real device is read on this side of the sandbox.
+        """
+        pad, err = self._need_pad()
+        if err:
+            return err
+        if self._pad_proxy is not None:
+            return {"error": "a proxy is already running; pad_proxy_stop first",
+                    "proxy": self._pad_proxy.status()}
+        from wbox.gamepad_proxy import GamepadProxy, find_pad
+        node = find_pad(exclude=pad.event_node) if device == "auto" else device
+        if not node:
+            return {"error": "no real controller found: plug one in, or give "
+                             "its event node instead of \"auto\""}
+        try:
+            proxy = GamepadProxy(pad, node, grab=grab)
+            status = proxy.start()
+        except (OSError, RuntimeError) as exc:
+            return {"error": str(exc)}
+        self._pad_proxy = proxy
+        return {"ok": True, "proxy": status}
+
+    def pad_proxy_stop(self) -> dict:
+        """Stop mirroring, and leave the virtual pad neutral."""
+        if self._pad_proxy is None:
+            return {"error": "no proxy running"}
+        result = self._pad_proxy.stop()
+        self._pad_proxy = None
+        return {"ok": True, **result}
 
     def pad_state(self) -> dict:
         pad, err = self._need_pad()
