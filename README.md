@@ -189,9 +189,9 @@ other calls turn the camera or take screenshots.
 xbox360` (or `xboxone`) makes a virtual Xbox pad over `/dev/uinput`, before
 the app starts, with the vendor, product, buttons and axes of a real one, so
 SDL maps it from its own database like a pad plugged into USB. `pad_script`
-plays a timed sequence in one call (`"0.5:a,1:lup/1500,3:lt+rb"`, the syntax
-of Hookshot's `HOS_INPUT_SCRIPT`), and `pad_rumble` reports the vibration the
-game asked for.
+plays a timed sequence in one call (`"0.5:a,1:lup/1500,3:lt+rb"`:
+`<seconds>:<input>[+<input>...][/<ms>]`), and `pad_rumble` reports the
+vibration the game asked for.
 
 ```yaml
 key_hold_ms: 50
@@ -279,7 +279,7 @@ wboxr mask suggest runs/title-screen/*/       # what changes between them
 the next: inputs at fixed times land on different frames, and captures at
 "t = 10 s" show different things. Each `wait` is a point where every run is
 back in step, and the checkpoints are taken at those points. When the app can
-count its own frames (Hookshot's `HOS_INPUT_FRAME_CLOCK`), let it: that is
+count its own frames (an input script timed in game frames), let it: that is
 deterministic where wbox, outside, can only wait.
 
 **Masks.** A clock, particles, water: some pixels are never the same twice. A

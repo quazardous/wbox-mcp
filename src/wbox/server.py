@@ -361,8 +361,7 @@ _PAD_TOOLS = [
             "'<seconds>:<input>[+<input>...][/<ms>]' comma-separated, e.g. "
             "'0.5:a,1:lup/1500,3:lt+rb'. Inputs: buttons, d-pad, lt/rt, and "
             "sticks at their edge LUP LDOWN LLEFT LRIGHT RUP RDOWN RLEFT "
-            "RRIGHT. Held 200 ms unless /<ms>. Same syntax as Hookshot's "
-            "HOS_INPUT_SCRIPT."),
+            "RRIGHT. Held 200 ms unless /<ms>."),
         inputSchema={"type": "object", "properties": {
             "script": {"type": "string"},
         }, "required": ["script"]},

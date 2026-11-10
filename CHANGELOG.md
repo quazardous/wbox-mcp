@@ -43,7 +43,7 @@
   box a pad made over `/dev/uinput`, which SDL maps from its own database like
   one plugged into USB: buttons, d-pad, analog sticks and triggers
   (`pad_press`, `pad_hold`, `pad_stick`, `pad_trigger`), timed sequences in
-  one call (`pad_script`, in the syntax of Hookshot's `HOS_INPUT_SCRIPT`), and
+  one call (`pad_script`: `<seconds>:<input>[+<input>...][/<ms>]`), and
   the rumble the game asks for (`pad_rumble`). The app runs under bubblewrap
   with this pad as its only input device: it cannot see your real pads,
   keyboard or mouse. Needs write access to `/dev/uinput` (a udev rule, in the

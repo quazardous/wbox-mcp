@@ -560,7 +560,7 @@ class CompositorServer:
         """Play a timed sequence of presses, in one go.
 
         `<seconds>:<input>[+<input>...][/<ms>]`, comma-separated, as
-        Hookshot's HOS_INPUT_SCRIPT: `0.5:A,2:LUP/1500,3:LT+RB`. An input
+        for example `0.5:A,2:LUP/1500,3:LT+RB`. An input
         is a button, a d-pad direction, a trigger (fully pulled), or a stick
         pushed to its edge (LUP LDOWN LLEFT LRIGHT, RUP ...). Held 200 ms
         unless `/<ms>`. One call: the timing is the box's, not the round

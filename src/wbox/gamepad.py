@@ -450,8 +450,9 @@ def isolation_wrapper(event_node: str) -> tuple[list[str], dict[str, str]]:
 
 # ── Timed scripts ──
 #
-# The syntax of Hookshot's HOS_INPUT_SCRIPT, so a script written for one
-# plays in the other: `<seconds>:<input>[+<input>...][/<ms>]`, comma-separated.
+# `<seconds>:<input>[+<input>...][/<ms>]`, comma-separated: the form game
+# input scripts commonly take, so one written for a game's own scripted
+# input can often be played here as it is.
 
 _SCRIPT_STICKS = {
     "lup": ("left", 0, -1), "ldown": ("left", 0, 1),
