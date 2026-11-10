@@ -34,6 +34,9 @@ next, so inputs at fixed times land on different frames and captures at
 "t = 10 s" show different things. Each wait is a point where every run is
 back in step, and checkpoints are taken at those points.
 
+Times (steps, checkpoints) count from just before the launch, so a
+start-up is measured too; results.json keeps launch_seconds apart.
+
 Each run writes runs/<name>/<date>/: manifest.json (what it ran on: wbox,
 the GPU and its driver, the kernel, hashes of the scenario, the config,
 the setup files and the masks), results.json (each step, its duration,
@@ -242,7 +245,8 @@ class Run:
                  label: str = "", box_factory=None, log=print):
         self.sc = sc
         self.log = log
-        root = Path(runs_root) if runs_root else Path(sc["_dir"]) / "runs"
+        # Absolute: captures are written by path, from wherever the box runs
+        root = (Path(runs_root).expanduser() if runs_root else Path(sc["_dir"]) / "runs").resolve()
         stamp = _now_stamp() + (f"-{label}" if label else "")
         base = root / sc["name"] / stamp
         n, self.dir = 1, base
@@ -414,6 +418,9 @@ class Run:
             "t": t, "path": str(path.relative_to(self.dir)),
             "mask": imaging.resolve_mask(spec, self.masks),
             "mask_spec": spec,
+            # what compare uses for this checkpoint unless told otherwise:
+            # a shimmering logo needs more slack than a menu
+            "tolerance": int(a.get("tolerance", self.tolerance)),
         }
         return {"t": t}
 
@@ -485,10 +492,15 @@ class Run:
             if not cmd:
                 raise ScenarioError("the wbox config has no app.command")
             self.log(f"[{self.sc['name']}] launch → {self.dir}")
+            # The clock starts before the launch: start-up is often what is
+            # measured, and launch() itself waits (timeouts.app_render). A
+            # scenario timing a start-up sets that wait low and waits on
+            # the app's log instead.
+            self._t0 = time.monotonic()
             launched = self.box.launch(cmd, env)
+            self.launch_seconds = self._t()
             if "error" in launched:
                 raise ScenarioError(f"launch: {launched['error']}")
-            self._t0 = time.monotonic()
             for i, step in enumerate(self.sc["steps"], 1):
                 t = self._t()
                 entry = {"n": i, "kind": step["kind"], "args": step["args"], "t": t}
@@ -525,6 +537,7 @@ class Run:
         results = {
             "scenario": self.sc["name"], "status": status, "reason": reason,
             "seconds": self._t() if self._t0 else 0.0,
+            "launch_seconds": getattr(self, "launch_seconds", None),
             "steps": self.steps, "checkpoints": self.checkpoints,
             "records": self.records, "metrics": metrics, "collected": collected,
             "scenario_dir": self.sc["_dir"], "tolerance": self.tolerance,
@@ -756,10 +769,11 @@ def compare_runs(run_dirs: list, mask=None, tolerance: int | None = None,
                 continue
             row["t"][lbl] = other["t"]
             a, b = base_dir / info["path"], d / other["path"]
-            res = imaging.diff(a, b, zones, tol, sc_dir)
+            cp_tol = tolerance if tolerance is not None else int(info.get("tolerance", tol))
+            res = imaging.diff(a, b, zones, cp_tol, sc_dir)
             row["differ"][lbl] = res.get("differ", res.get("error"))
             if "error" not in res:
-                img = imaging.diff_image(a, b, out / f"{cp}__{lbl}.png", zones, tol, sc_dir)
+                img = imaging.diff_image(a, b, out / f"{cp}__{lbl}.png", zones, cp_tol, sc_dir)
                 row["diff_images"][lbl] = str(img)
         report["checkpoints"][cp] = row
     metric_names = {m for _, r, _ in runs for m in r.get("metrics", {})}

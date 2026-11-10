@@ -25,7 +25,8 @@
   `run_scenario`, `compare_runs`, `suggest_mask`. Needs
   `pip install "wbox-mcp[scenario]"` (numpy, Pillow).
 - **Capture masks.** Zones to ignore — rects in pixels or percentages, or a
-  PNG — wherever pixels are compared: waits, checkpoints, `compare`, and a
+  PNG — or the only zones to look at (`only`: a menu over a background
+  video), wherever pixels are compared: waits, checkpoints, `compare`, and a
   recording's changed frames. A ticking clock no longer keeps a screen from
   ever counting as stable. Captures stay raw, so a mask can change and old
   runs be compared again; `wboxr mask suggest` finds what changes between

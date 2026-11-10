@@ -32,6 +32,7 @@ Usage: game_dummy.py <state.json> [rumble_ms]
 
 import json
 import os
+import random
 import sys
 
 os.environ.setdefault("SDL_VIDEODRIVER", "wayland")
@@ -124,7 +125,10 @@ def main():
             pygame.draw.rect(screen, (220, 220, 220), (20, 300, 6 * f, 20))
         elif f == 90:
             print("game ready", flush=True)
-        pygame.draw.rect(screen, ((f * 7) % 256, 200, 80), (560, 10, 70, 30))
+        # A colour drawn at random each frame: two runs never show the same
+        # clock at a checkpoint, however well a scenario keeps them in step
+        pygame.draw.rect(screen, (random.randrange(256), random.randrange(256), 80),
+                         (560, 10, 70, 30))
         pygame.display.flip()
         clock.tick(60)
         seen["frames"] += 1

@@ -104,6 +104,16 @@ class TestImaging:
         assert not keep[0:5, 0:10].any() and keep[5:, 10:90].all()
         assert not keep[25:, 90:].any() and keep[:25, 90:].all()
 
+    def test_only_zones_ignore_everything_else(self):
+        from wbox.imaging import diff, mask_array
+        keep = mask_array([{"only": [10, 10, 20, 10]}, {"only": ["80%", 0, "20%", "20%"]},
+                           {"rect": [10, 10, 5, 5]}], 100, 50)
+        assert keep.sum() == 20 * 10 - 25 + 20 * 10
+        a, b = self.img(), self.img()
+        b[30:, :] = (250, 250, 250)        # the "video" behind the menu
+        assert diff(a, b, [{"only": [10, 10, 20, 10]}])["pixels"] == 0
+        assert diff(a, b, [])["pixels"] == 100 * 20
+
     def test_mask_from_an_image(self, tmp_path):
         from PIL import Image
         from wbox.imaging import mask_array
@@ -215,6 +225,10 @@ class TestRuns:
             assert Path(rep["checkpoints"][cp]["diff_images"][label]).exists()
         assert "dummy" in format_report(rep) or "start" in format_report(rep)
 
+    def test_a_checkpoints_tolerance_is_kept_for_compare(self, two_runs):
+        _, runs = two_runs
+        assert runs[0]["checkpoints"]["start"]["tolerance"] == 8
+
     def test_without_the_mask_the_clock_shows(self, two_runs):
         _, runs = two_runs
         rep = compare_runs([r["run"] for r in runs], mask="none")
@@ -248,6 +262,18 @@ def test_a_wait_that_cannot_succeed_fails_cleanly(tmp_path):
     assert r["checkpoints"] == {}
     assert (Path(r["run"]) / "failure.png").exists()
     assert r["steps"][-1]["error"]
+
+
+def test_a_relative_runs_directory(tmp_path, monkeypatch):
+    _need_box()
+    sc = load_scenario(make_scenario(tmp_path, [{"wait": {"log": "game ready", "timeout": 20}},
+                                                {"checkpoint": "here"}]))
+    monkeypatch.chdir(tmp_path)
+    r = Run(sc, runs_root="rel-runs", log=lambda *_: None).execute()
+    assert r["status"] == "ok", r["reason"]
+    assert (tmp_path / "rel-runs" / "dummy").is_dir()
+    assert (Path(r["run"]) / "checkpoints" / "here.png").exists()
+    assert r["launch_seconds"] > 0 and r["checkpoints"]["here"]["t"] >= r["launch_seconds"]
 
 
 def test_setup_files_are_in_place_during_the_run_and_restored(tmp_path):

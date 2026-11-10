@@ -12,6 +12,11 @@ A mask is a list of zones to ignore:
 
     {"rect": [x, y, w, h]}          pixels, or "12%" strings, any mix
     {"image": "masks/water.png"}    black (or transparent) = ignored
+    {"only": [x, y, w, h]}          everything outside is ignored: for a
+                                    screen whose background never holds
+                                    still (a title over a video), compare
+                                    the menu alone. Several "only" zones
+                                    add up.
 
 Captures are kept raw; masks apply when pixels are compared, so a mask can
 change after the fact and old runs be compared again.
@@ -70,27 +75,37 @@ def resolve_mask(spec, named: dict | None = None) -> list[dict]:
             if item not in named:
                 raise ValueError(f"unknown mask {item!r}; defined: {sorted(named) or 'none'}")
             zones.extend(resolve_mask(named[item], {}))
-        elif isinstance(item, dict) and ("rect" in item or "image" in item):
+        elif isinstance(item, dict) and ("rect" in item or "image" in item or "only" in item):
             zones.append(item)
         else:
-            raise ValueError(f"mask zone {item!r}: expected {{rect: [x, y, w, h]}} "
-                             "or {image: file.png} or a mask name")
+            raise ValueError(f"mask zone {item!r}: expected {{rect: [x, y, w, h]}}, "
+                             "{only: [x, y, w, h]}, {image: file.png} or a mask name")
     return zones
+
+
+def _rect(r, width: int, height: int) -> tuple[int, int, int, int]:
+    if not isinstance(r, (list, tuple)) or len(r) != 4:
+        raise ValueError(f"mask rect {r!r}: expected [x, y, w, h]")
+    return (_length(r[0], width, "x"), _length(r[1], height, "y"),
+            _length(r[2], width, "w"), _length(r[3], height, "h"))
 
 
 def mask_array(zones: list[dict], width: int, height: int, base_dir: Path | None = None):
     """A boolean array, True where pixels count (outside every zone)."""
     np, Image = _deps()
     keep = np.ones((height, width), dtype=bool)
+    only = [z["only"] for z in zones if "only" in z]
+    if only:
+        inside = np.zeros((height, width), dtype=bool)
+        for r in only:
+            x, y, w, h = _rect(r, width, height)
+            inside[max(y, 0):max(y + h, 0), max(x, 0):max(x + w, 0)] = True
+        keep &= inside
     for zone in zones:
+        if "only" in zone:
+            continue
         if "rect" in zone:
-            r = zone["rect"]
-            if not isinstance(r, (list, tuple)) or len(r) != 4:
-                raise ValueError(f"mask rect {r!r}: expected [x, y, w, h]")
-            x = _length(r[0], width, "x")
-            y = _length(r[1], height, "y")
-            w = _length(r[2], width, "w")
-            h = _length(r[3], height, "h")
+            x, y, w, h = _rect(zone["rect"], width, height)
             keep[max(y, 0):max(y + h, 0), max(x, 0):max(x + w, 0)] = False
         else:
             path = Path(zone["image"])

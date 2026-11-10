@@ -255,6 +255,7 @@ setup:
 masks:
   clock: [{rect: ["85%", "2%", "13%", "6%"]}]             # pixels or %
   water: [{image: masks/water.png}]                       # black = ignored
+  menu:  [{only: [480, 545, 320, 85]}]                    # this alone is compared
 default_mask: [clock]
 steps:
   - wait: {log: "renderer ready", timeout: 120}           # the app's output
@@ -283,7 +284,9 @@ deterministic where wbox, outside, can only wait.
 
 **Masks.** A clock, particles, water: some pixels are never the same twice. A
 mask names zones to ignore, and applies everywhere pixels are compared — a
-`stable` wait would otherwise never end on a ticking clock. Captures are kept
+`stable` wait would otherwise never end on a ticking clock. An `only` zone
+works the other way: everything outside it is ignored, for a menu over a
+background video that never holds still. Captures are kept
 raw, so a mask can change and old runs be compared again. `mask suggest`
 finds the zones that differ between runs at the same checkpoint.
 
