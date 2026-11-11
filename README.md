@@ -176,7 +176,7 @@ The same set as MCP tools and as methods of a box in Python:
 
 `launch` · `stop` · `kill` · `screenshot` · `screen_changed` · `record` · `audio` · `click` · `dblclick` · `drag` · `scroll` · `hold` · `type_text` · `key` · `keys` · `press` · `key_down` · `key_up` · `mouse_move` · `get_mouse_position` · `get_size` · `resize` · `list_windows` · `focus_window` · `clipboard_read` · `clipboard_write` · `tail_log` · `clean` · `debug_input`
 
-With `gamepad:` set: `pad_press` · `pad_hold` · `pad_stick` · `pad_trigger` · `pad_script` · `pad_state` · `pad_neutral` · `pad_rumble`
+With `gamepad:` set: `pad_press` · `pad_hold` · `pad_stick` · `pad_trigger` · `pad_script` · `pad_state` · `pad_neutral` · `pad_rumble` · `pad_proxy` · `pad_proxy_stop` · `pad_record_start` · `pad_record_stop`
 
 Plus custom script tools via `wboxr tool add` (MCP).
 
@@ -202,10 +202,27 @@ plays a timed sequence in one call (`"0.5:a,1:lup/1500,3:lt+rb"`:
 `<seconds>:<input>[+<input>...][/<ms>]`), and `pad_rumble` reports the
 vibration the game asked for.
 
+Analog values hold until the next one for that axis: `"1:lx=-0.4+ly=0.3,
+2:lt=0.6,3:lx=0+ly=0+lt=0"` (sticks -1..1 with `ly=-1` pushed up, triggers
+0..1).
+
+**Play it by hand once, replay it for ever.** `pad_proxy` mirrors a real
+controller plugged into the host onto the box's pad, so the game can be played
+to the scene where a bug shows; the app still sees only the virtual pad, and
+`grab: true` takes the real one from the desktop for the session.
+`pad_record_start` / `pad_record_stop` record whatever drives the pad as a
+`pad_script` — buttons with their measured holds, sticks and triggers sampled
+30 times a second per axis — written to `<name>.padscript`, which
+`pad_script` (`file:`) or a scenario plays back.
+
 ```yaml
 key_hold_ms: 50
-gamepad: xbox360          # or {profile: xboxone, isolate: true}
+gamepad: xbox360          # or {profile: xboxone, isolate: true,
+                          #     proxy: auto, grab: false}
 ```
+
+`proxy: auto` (or an event node) starts the proxy at launch, with the first
+real pad that is not the box's own; asked for and not found, the launch fails.
 
 A uinput device belongs to the whole machine, so the box isolates the app in
 both directions: it runs under bubblewrap with a `/dev/input` holding the

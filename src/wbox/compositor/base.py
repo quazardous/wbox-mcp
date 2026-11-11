@@ -170,6 +170,7 @@ class CompositorServer:
         # None discards them, as before.
         self.app_output: Path | None = None
         self._pad_proxy = None        # a real controller mirrored onto it
+        self._pad_recorder = None     # what drives it, written as a pad_script
 
     def _compositor_env(self) -> dict[str, str]:
         """Environment for the compositor process.
@@ -464,6 +465,14 @@ class CompositorServer:
         settings = self._gamepad_settings()
         return bool(settings and settings[1])
 
+    def _gamepad_proxy_settings(self) -> tuple[str, bool] | None:
+        """`gamepad: {proxy: auto | /dev/input/eventN, grab: false}`: a real
+        controller mirrored onto the pad from launch (GitHub #17)."""
+        cfg = self.gamepad_cfg
+        if not isinstance(cfg, dict) or not cfg.get("proxy"):
+            return None
+        return str(cfg["proxy"]), bool(cfg.get("grab", False))
+
     def _start_gamepad(self) -> None:
         settings = self._gamepad_settings()
         if settings is None or self._pad is not None:
@@ -476,8 +485,18 @@ class CompositorServer:
         from wbox.gamepad import VirtualGamepad
         profile, _ = settings
         self._pad = VirtualGamepad(profile).open()
+        proxy = self._gamepad_proxy_settings()
+        if proxy:
+            # Asked for in the config: no controller is a failed launch, not
+            # a box that silently ignores the pad in your hands.
+            r = self.pad_proxy(*proxy)
+            if "error" in r:
+                self._stop_gamepad()
+                raise RuntimeError(f"gamepad proxy: {r['error']}")
 
     def _stop_gamepad(self) -> None:
+        if self._pad_recorder is not None:
+            self._pad_recorder.stop()         # kept: pad_record_stop still answers
         if self._pad_proxy is not None:
             try:
                 self._pad_proxy.stop()
@@ -602,6 +621,41 @@ class CompositorServer:
         self._pad_proxy = None
         return {"ok": True, **result}
 
+    def pad_record_start(self) -> dict:
+        """Record whatever drives the pad from now on, as a pad_script."""
+        pad, err = self._need_pad()
+        if err:
+            return err
+        if self._pad_recorder is not None and self._pad_recorder.stopped_at is None:
+            return {"error": "already recording; pad_record_stop first"}
+        from wbox.gamepad_record import PadRecorder
+        self._pad_recorder = PadRecorder(pad).start()
+        return {"ok": True, "recording": True,
+                "proxy": self._pad_proxy.status() if self._pad_proxy else None}
+
+    def pad_record_stop(self, name: str | None = None, rate: float = 30.0) -> dict:
+        """Stop recording; the pad_script, also written to a file.
+
+        `rate`: analog samples kept per second and axis (30 by default).
+        """
+        rec = self._pad_recorder
+        if rec is None:
+            return {"error": "not recording: pad_record_start first"}
+        if rec.stopped_at is None:
+            rec.stop()
+        script, summary = rec.script(rate=rate)
+        if not script:
+            return {"error": "nothing was recorded: no input reached the pad",
+                    **summary}
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        fname = name or f"pad-{stamp}"
+        if not fname.endswith(".padscript"):
+            fname += ".padscript"
+        out = Path(self.state.screenshot_dir or ".") / fname
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(script + "\n")
+        return {"ok": True, "path": str(out), **summary, "script": script}
+
     def pad_state(self) -> dict:
         pad, err = self._need_pad()
         if err:
@@ -635,33 +689,17 @@ class CompositorServer:
         pad, err = self._need_pad()
         if err:
             return err
-        from wbox.gamepad import parse_pad_script, script_actions
+        from wbox.gamepad import parse_pad_script, play_script
         try:
             steps = parse_pad_script(script)
         except ValueError as exc:
             return {"error": str(exc)}
-        timeline = []   # (time, order, fn): releases before presses at a tie
-        for start, inputs, ms in steps:
-            for kind, *args in inputs:
-                on, off = script_actions(pad, kind, args)
-                timeline.append((start, 1, on))
-                timeline.append((start + ms / 1000.0, 0, off))
-        timeline.sort(key=lambda e: (e[0], e[1]))
-        t0 = time.monotonic()
-        late = 0.0
         try:
-            for when, _, fn in timeline:
-                delay = when - (time.monotonic() - t0)
-                if delay > 0:
-                    time.sleep(delay)
-                else:
-                    late = max(late, -delay)
-                fn()
+            seconds, late = play_script(pad, steps)
         except OSError as exc:
             pad.neutral()
             return {"error": f"pad_script failed: {exc}"}
-        return {"ok": True, "steps": len(steps),
-                "seconds": round(time.monotonic() - t0, 3),
+        return {"ok": True, "steps": len(steps), "seconds": round(seconds, 3),
                 "max_late_ms": round(late * 1000, 1)}
 
     def _start_audio(self) -> None:

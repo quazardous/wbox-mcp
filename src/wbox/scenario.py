@@ -20,6 +20,7 @@ kept side by side. A scenario is that run, written down:
       - wait: {match: refs/title.png, threshold: 0.05}
       - checkpoint: title
       - pad_script: "0:a,2:a"
+      - pad_script: {file: to-the-boss.padscript}   # a pad_record_stop recording
       - wait: {log: "scene loaded", timeout: 60}
       - record: {seconds: 10, name: walk, during: {type: pad_script, script: "0:lup/10000"}}
       - checkpoint: {name: after-walk, mask: [hud]}
@@ -146,13 +147,47 @@ def load_scenario(path) -> dict:
     if not isinstance(steps, list) or not steps:
         raise ScenarioError("steps: expected a non-empty list")
     names = set()
-    sc["steps"] = [_check_step(i, s, masks, names) for i, s in enumerate(steps, 1)]
+    extra = b""
+    resolved = []
+    for i, s in enumerate(steps, 1):
+        s, data = _pad_script_file(i, s, Path(sc["_dir"]))
+        extra += data
+        resolved.append(s)
+    if extra:   # a recording replayed is part of what the run is
+        sc["_digest"] = _sha(raw + extra)
+    sc["steps"] = [_check_step(i, s, masks, names) for i, s in enumerate(resolved, 1)]
     setup = sc.get("setup") or {}
     for src in (setup.get("copy") or {}):
         p = Path(sc["_dir"]) / os.path.expanduser(src)
         if not p.exists():
             raise ScenarioError(f"setup.copy: {src} does not exist (relative to {sc['_dir']})")
     return sc
+
+
+def _pad_script_file(i: int, step, base: Path):
+    """`- pad_script: {file: walk.padscript}`: a recording from pad_record_stop,
+    read now (relative to the scenario) so a missing or broken file fails
+    before anything runs. → (the step with the script inline, file bytes)."""
+    if not (isinstance(step, dict) and len(step) == 1
+            and isinstance(step.get("pad_script"), dict)
+            and "file" in step["pad_script"]):
+        return step, b""
+    args = dict(step["pad_script"])
+    if "script" in args:
+        raise ScenarioError(f"step {i}: pad_script takes script or file, not both")
+    path = base / os.path.expanduser(str(args.pop("file")))
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise ScenarioError(f"step {i}: cannot read {path}: {exc}") from None
+    script = data.decode().strip()
+    from wbox.gamepad import parse_pad_script
+    try:
+        parse_pad_script(script)
+    except ValueError as exc:
+        raise ScenarioError(f"step {i}: {path.name}: {exc}") from None
+    args["script"] = script
+    return {"pad_script": args}, data
 
 
 def _check_step(i: int, step, masks: dict, checkpoint_names: set) -> dict:

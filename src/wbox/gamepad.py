@@ -115,6 +115,11 @@ TRIGGERS = {"lt": ABS_Z, "rt": ABS_RZ}
 _TRIGGER_ALIASES = {"l2": "lt", "r2": "rt", "zl": "lt", "zr": "rt",
                     "lefttrigger": "lt", "righttrigger": "rt"}
 STICKS = {"left": (ABS_X, ABS_Y), "right": (ABS_RX, ABS_RY)}
+# One axis at a time, by the names pad_script uses for analog values:
+# sticks -1..1 (y = -1 pushed up), triggers 0..1.
+AXES = {"lx": ABS_X, "ly": ABS_Y, "rx": ABS_RX, "ry": ABS_RY,
+        "lt": ABS_Z, "rt": ABS_RZ}
+_TRIGGER_AXES = ("lt", "rt")
 
 # Profiles: what the pad tells the kernel it is. SDL keys its mapping on
 # bus/vendor/product/version, so these are the values xpad gives real pads.
@@ -199,6 +204,7 @@ class VirtualGamepad:
         self._rumble_log: list[dict] = []
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._listeners: list = []   # fn(monotonic time, [(type, code, value)])
 
     # ── Lifecycle ──
 
@@ -280,6 +286,26 @@ class VirtualGamepad:
             os.write(self.fd, data)
             for t, c, v in events:
                 self._state[(t, c)] = v
+            # Under the lock: a recorder sees events in the order the app did
+            if self._listeners:
+                at = time.monotonic()
+                for fn in list(self._listeners):
+                    fn(at, events)
+
+    def add_listener(self, fn) -> None:
+        """fn(monotonic time, [(type, code, value)]) after each emit:
+        whatever drives the pad — a script, a tool, a proxied real pad."""
+        with self._lock:
+            self._listeners.append(fn)
+
+    def remove_listener(self, fn) -> None:
+        with self._lock:
+            if fn in self._listeners:
+                self._listeners.remove(fn)
+
+    @property
+    def trigger_max(self) -> int:
+        return self._p["trigger_max"]
 
     def set_buttons(self, names, down: bool) -> None:
         """Press or release buttons (d-pad directions included) at once."""
@@ -305,6 +331,17 @@ class VirtualGamepad:
         axis = _parse_trigger(trigger)
         self._emit([(EV_ABS, axis,
                      round(_clamp(value, 0, 1) * self._p["trigger_max"]))])
+
+    def set_axis(self, name: str, value: float) -> None:
+        """One axis: lx ly rx ry in -1..1 (ly = -1 pushed up), lt rt in 0..1."""
+        n = name.strip().lower()
+        if n not in AXES:
+            raise ValueError(f"unknown axis {name!r}; expected one of {sorted(AXES)}")
+        if n in _TRIGGER_AXES:
+            raw = round(_clamp(value, 0, 1) * self._p["trigger_max"])
+        else:
+            raw = round(_clamp(value, -1, 1) * STICK_MAX)
+        self._emit([(EV_ABS, AXES[n], raw)])
 
     def neutral(self) -> None:
         """Every button up, sticks centred, triggers released."""
@@ -466,6 +503,20 @@ def parse_script_input(token: str) -> tuple:
     """One input of a script → ("button", name) | ("trigger", name) |
     ("stick", stick, x, y)."""
     t = token.strip().lower()
+    if "=" in t:
+        name, _, raw = t.partition("=")
+        name = name.strip()
+        if name not in AXES:
+            raise ValueError(f"script input {token!r}: unknown axis {name!r}; "
+                             f"expected one of {sorted(AXES)}")
+        try:
+            value = float(raw)
+        except ValueError:
+            raise ValueError(f"script input {token!r}: {raw!r} is not a number") from None
+        lo = 0.0 if name in _TRIGGER_AXES else -1.0
+        if not lo <= value <= 1.0:
+            raise ValueError(f"script input {token!r}: {name} goes from {lo:g} to 1")
+        return ("axis", name, value)
     if t in _SCRIPT_STICKS:
         return ("stick", *_SCRIPT_STICKS[t])
     if _TRIGGER_ALIASES.get(t, t) in TRIGGERS:
@@ -496,6 +547,9 @@ def parse_pad_script(script: str, default_ms: int = 200):
         inputs = [parse_script_input(n) for n in names.split("+") if n.strip()]
         if not inputs:
             raise ValueError(f"script step {raw!r}: no input")
+        if ms and any(i[0] == "axis" for i in inputs):
+            raise ValueError(f"script step {raw!r}: an axis value holds until "
+                             "the next one for that axis; /<ms> is for presses")
         if start < 0 or hold < 0:
             raise ValueError(f"script step {raw!r}: negative time")
         steps.append((start, inputs, hold))
@@ -505,13 +559,39 @@ def parse_pad_script(script: str, default_ms: int = 200):
 
 
 def script_actions(pad: "VirtualGamepad", kind: str, args) -> tuple:
-    """(press, release) callables for one parsed script input."""
+    """(press, release) callables for one parsed script input; release is
+    None for an axis value, which stays until the next one."""
     if kind == "button":
         return (lambda: pad.set_buttons([args[0]], True),
                 lambda: pad.set_buttons([args[0]], False))
     if kind == "trigger":
         return (lambda: pad.set_trigger(args[0], 1.0),
                 lambda: pad.set_trigger(args[0], 0.0))
+    if kind == "axis":           # a value: set, and left as it is
+        name, value = args
+        return (lambda: pad.set_axis(name, value), None)
     stick, x, y = args
     return (lambda: pad.set_stick(stick, x, y),
             lambda: pad.set_stick(stick, 0, 0))
+
+
+def play_script(pad: "VirtualGamepad", steps) -> tuple[float, float]:
+    """Play parsed steps on the pad, on its own clock: (seconds, worst late)."""
+    timeline = []   # (time, order, fn): releases before presses at a tie
+    for start, inputs, ms in steps:
+        for kind, *args in inputs:
+            on, off = script_actions(pad, kind, args)
+            timeline.append((start, 1, on))
+            if off is not None:
+                timeline.append((start + ms / 1000.0, 0, off))
+    timeline.sort(key=lambda e: (e[0], e[1]))
+    t0 = time.monotonic()
+    late = 0.0
+    for when, _, fn in timeline:
+        delay = when - (time.monotonic() - t0)
+        if delay > 0:
+            time.sleep(delay)
+        else:
+            late = max(late, -delay)
+        fn()
+    return time.monotonic() - t0, late

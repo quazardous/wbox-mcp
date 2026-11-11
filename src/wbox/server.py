@@ -361,10 +361,52 @@ _PAD_TOOLS = [
             "'<seconds>:<input>[+<input>...][/<ms>]' comma-separated, e.g. "
             "'0.5:a,1:lup/1500,3:lt+rb'. Inputs: buttons, d-pad, lt/rt, and "
             "sticks at their edge LUP LDOWN LLEFT LRIGHT RUP RDOWN RLEFT "
-            "RRIGHT. Held 200 ms unless /<ms>."),
+            "RRIGHT, held 200 ms unless /<ms>; or analog values lx ly rx ry "
+            "(-1..1, ly=-1 up) lt rt (0..1) as 'lx=-0.4+ly=0.3', which hold "
+            "until the next value for that axis. Give `file` to play a "
+            "recording from pad_record_stop."),
         inputSchema={"type": "object", "properties": {
             "script": {"type": "string"},
-        }, "required": ["script"]},
+            "file": {"type": "string", "description": "A .padscript file instead of script"},
+        }},
+    ),
+    Tool(
+        name="pad_proxy",
+        description=(
+            "Mirror a real controller plugged into the host onto the box's "
+            "pad, to play the app by hand. The app still sees only the "
+            "virtual pad. grab=true takes the real pad from the host desktop "
+            "for the session."),
+        inputSchema={"type": "object", "properties": {
+            "device": {"type": "string", "default": "auto",
+                       "description": "An event node, or auto for the first real pad"},
+            "grab": {"type": "boolean", "default": False},
+        }},
+    ),
+    Tool(
+        name="pad_proxy_stop",
+        description="Stop mirroring the real controller; the pad is left neutral",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="pad_record_start",
+        description=(
+            "Record whatever drives the box's pad (a proxied real controller, "
+            "scripts, the pad tools) until pad_record_stop, to replay it "
+            "later with pad_script: play to a scene once by hand, get a run "
+            "that repeats."),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="pad_record_stop",
+        description=(
+            "Stop recording: returns the pad_script and writes it to "
+            "<name>.padscript next to the screenshots. Sticks and triggers "
+            "are sampled `rate` times a second per axis (default 30)."),
+        inputSchema={"type": "object", "properties": {
+            "name": {"type": "string"},
+            "rate": {"type": "number", "default": 30},
+        }},
     ),
     Tool(
         name="pad_state",
@@ -473,7 +515,28 @@ def _call_pad(compositor, name: str, a: dict) -> dict:
     if name == "pad_trigger":
         return compositor.pad_trigger(a["trigger"], a.get("value", 1), a.get("hold_ms"))
     if name == "pad_script":
-        return compositor.pad_script(a["script"])
+        if a.get("file"):
+            try:
+                script = Path(a["file"]).read_text().strip()
+            except OSError as exc:
+                return {"error": f"cannot read {a['file']}: {exc}"}
+        elif a.get("script"):
+            script = a["script"]
+        else:
+            return {"error": "give script or file"}
+        return compositor.pad_script(script)
+    if name == "pad_proxy":
+        return compositor.pad_proxy(a.get("device", "auto"), a.get("grab", False))
+    if name == "pad_proxy_stop":
+        return compositor.pad_proxy_stop()
+    if name == "pad_record_start":
+        return compositor.pad_record_start()
+    if name == "pad_record_stop":
+        r = compositor.pad_record_stop(a.get("name"), a.get("rate", 30.0))
+        script = r.get("script", "")
+        if len(script) > 1500:   # a long session: the file has it all
+            r["script"] = script[:1500] + f"... ({len(script)} chars, see path)"
+        return r
     if name == "pad_state":
         return compositor.pad_state()
     if name == "pad_neutral":

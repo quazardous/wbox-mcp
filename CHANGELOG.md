@@ -9,6 +9,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Record a session, replay it** (#17). `pad_record_start` /
+  `pad_record_stop` record whatever drives the box's pad — a real controller
+  through `pad_proxy`, a script, the pad tools — as a `pad_script`, written
+  to `<name>.padscript`: play to the scene of a bug by hand once, and get a
+  run that repeats across versions and drivers. Buttons keep their measured
+  holds; sticks and triggers are sampled (30 a second per axis by default),
+  with every return to rest kept exactly.
+- **`pad_script` takes analog values**: `lx=-0.42+ly=0.3`, `lt=0.6`, which
+  hold until the next value for that axis. Everything it took before means
+  the same. It also plays a recording from a file (`file:`).
+- **`pad_proxy` and `pad_proxy_stop` as MCP tools**, and in the config:
+  `gamepad: {proxy: auto, grab: false}` starts the proxy at launch, and a
+  launch that cannot find the controller fails instead of ignoring it.
+
+
 ## [0.15.0] - 2026-11-10
 
 ### Added
